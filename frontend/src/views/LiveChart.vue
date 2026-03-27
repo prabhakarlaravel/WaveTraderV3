@@ -103,15 +103,15 @@ function initChart() {
   chartRef.value = createChart(chartContainer.value, {
     width: chartContainer.value.clientWidth,
     height: chartContainer.value.clientHeight,
-    layout: { background: { color: '#06090f' }, textColor: '#7b8ba8' },
-    grid: { vertLines: { color: '#162040' }, horzLines: { color: '#162040' } },
+    layout: { background: { color: '#1a2540' }, textColor: '#8b9bbf' },
+    grid: { vertLines: { color: '#243354' }, horzLines: { color: '#243354' } },
     crosshair: {
       mode: 0,
-      vertLine: { color: '#4a5978', width: 1, style: 2 },
-      horzLine: { color: '#4a5978', width: 1, style: 2 },
+      vertLine: { color: '#5a70a5', width: 1, style: 2 },
+      horzLine: { color: '#5a70a5', width: 1, style: 2 },
     },
-    rightPriceScale: { borderColor: '#162040' },
-    timeScale: { borderColor: '#162040', timeVisible: true, secondsVisible: false },
+    rightPriceScale: { borderColor: '#243354' },
+    timeScale: { borderColor: '#243354', timeVisible: true, secondsVisible: false },
   })
 
   candleSeriesRef.value = chartRef.value.addSeries(CandlestickSeries, {
@@ -207,13 +207,21 @@ watch(overlayToggles, () => renderAll(), { deep: true })
 
       <div class="toolbar-sep"></div>
 
-      <!-- Live badge -->
-      <div class="live-badge">
-        <div class="live-dot" :style="realtime.connected ? '' : 'background: var(--bear); box-shadow: 0 0 6px var(--bear)'"></div>
-        <span class="live-text">{{ realtime.connected ? 'LIVE' : 'OFFLINE' }}</span>
+      <!-- Live badge with stale warning -->
+      <div class="live-badge" :title="realtime.isStale ? 'Data may be stale (>90s since last update)' : 'Polling every 30s'">
+        <div class="live-dot" :style="realtime.isStale
+          ? 'background: var(--bear); box-shadow: 0 0 6px var(--bear)'
+          : realtime.connected
+            ? ''
+            : 'background: var(--ob); box-shadow: 0 0 6px var(--ob)'
+        "></div>
+        <span class="live-text" :style="realtime.isStale ? 'color: var(--bear)' : ''">
+          {{ realtime.isStale ? 'STALE' : 'LIVE' }}
+        </span>
         <span v-if="realtime.lastUpdate" class="live-text" style="color: var(--dim)">
           {{ new Date(realtime.lastUpdate).toLocaleTimeString('en-US', { hour12: false }) }}
         </span>
+        <span class="live-text" style="color: var(--dim); cursor: pointer" @click="realtime.forceRefresh()" title="Force refresh now">&#8635;</span>
       </div>
 
       <!-- Wave Matrix toggle -->
