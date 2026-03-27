@@ -168,6 +168,15 @@ watch(overlayToggles, () => renderAll(), { deep: true })
   <div class="dashboard">
     <!-- Chart toolbar -->
     <div class="chart-toolbar">
+      <!-- Symbol selector -->
+      <div class="tf-group">
+        <button v-for="s in chartStore.symbols" :key="s.id" @click="chartStore.setSymbol(s.id)"
+          :class="['tf-btn', { active: chartStore.activeSymbolId === s.id }]"
+          style="font-size: 11px; font-weight: 700">{{ s.ticker }}</button>
+      </div>
+
+      <div class="toolbar-sep"></div>
+
       <!-- Timeframe tabs -->
       <div class="tf-group">
         <button v-for="tf in timeframes" :key="tf" @click="chartStore.setTimeframe(tf)"
