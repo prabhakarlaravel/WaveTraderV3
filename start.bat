@@ -7,6 +7,10 @@ echo   WaveTrader V3 - Starting All Services
 echo ============================================
 echo.
 
+SET "PROJECT_DIR=%~dp0"
+SET "BACKEND_DIR=%PROJECT_DIR%backend"
+SET "FRONTEND_DIR=%PROJECT_DIR%frontend"
+
 :: -----------------------------------------------
 :: 1. Check prerequisites
 :: -----------------------------------------------
@@ -26,12 +30,7 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-where composer >nul 2>&1
-if %errorlevel% neq 0 (
-    echo WARNING: Composer not found. Skipping dependency check.
-) else (
-    echo   PHP: OK  ^|  Node: OK  ^|  Composer: OK
-)
+echo   PHP: OK  ^|  Node: OK
 
 :: -----------------------------------------------
 :: 2. Check PostgreSQL is running
@@ -39,11 +38,17 @@ if %errorlevel% neq 0 (
 echo [2/7] Checking PostgreSQL on port 5432...
 netstat -an | findstr ":5432" | findstr "LISTENING" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo WARNING: PostgreSQL does not appear to be running on port 5432.
-    echo   Start it via: net start postgresql-x64-16
-    echo   Or start Laragon / pgAdmin.
-    echo.
+    echo WARNING: PostgreSQL not running. Trying to start...
+    net start postgresql-x64-16 >nul 2>&1
+    timeout /t 3 /nobreak >nul
+    netstat -an | findstr ":5432" | findstr "LISTENING" >nul 2>&1
+    if %errorlevel% neq 0 (
+        echo ERROR: Could not start PostgreSQL. Start it manually.
+        pause
+        exit /b 1
+    )
 )
+echo   PostgreSQL: OK
 
 :: -----------------------------------------------
 :: 3. Check Redis is running
@@ -51,31 +56,37 @@ if %errorlevel% neq 0 (
 echo [3/7] Checking Redis on port 6379...
 netstat -an | findstr ":6379" | findstr "LISTENING" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo WARNING: Redis does not appear to be running on port 6379.
-    echo   Start it via: redis-server
-    echo   Or start Laragon.
-    echo.
+    echo WARNING: Redis not running. Trying to start...
+    start "" /MIN redis-server >nul 2>&1
+    timeout /t 2 /nobreak >nul
+    netstat -an | findstr ":6379" | findstr "LISTENING" >nul 2>&1
+    if %errorlevel% neq 0 (
+        echo ERROR: Could not start Redis. Start it manually.
+        pause
+        exit /b 1
+    )
 )
+echo   Redis: OK
 
 :: -----------------------------------------------
 :: 4. Install dependencies if needed
 :: -----------------------------------------------
 echo [4/7] Checking dependencies...
 
-if not exist "backend\vendor" (
+if not exist "%BACKEND_DIR%\vendor" (
     echo   Installing backend dependencies...
-    cd backend
+    pushd "%BACKEND_DIR%"
     composer install --no-interaction --quiet
-    cd ..
+    popd
 ) else (
     echo   Backend dependencies: OK
 )
 
-if not exist "frontend\node_modules" (
+if not exist "%FRONTEND_DIR%\node_modules" (
     echo   Installing frontend dependencies...
-    cd frontend
-    npm install --silent
-    cd ..
+    pushd "%FRONTEND_DIR%"
+    call npm install --silent
+    popd
 ) else (
     echo   Frontend dependencies: OK
 )
@@ -84,49 +95,56 @@ if not exist "frontend\node_modules" (
 :: 5. Run migrations
 :: -----------------------------------------------
 echo [5/7] Running database migrations...
-cd backend
+pushd "%BACKEND_DIR%"
 php artisan migrate --force --quiet 2>nul
 if %errorlevel% neq 0 (
-    echo   WARNING: Migrations failed. Check database connection.
+    echo   WARNING: Migrations may have failed. Check database.
 ) else (
     echo   Migrations: OK
 )
-cd ..
+popd
 
 :: -----------------------------------------------
-:: 6. Start all services in separate windows
+:: 6. Kill any existing WaveTrader processes
 :: -----------------------------------------------
-echo [6/7] Starting services...
+echo [6/7] Cleaning up old processes...
+taskkill /FI "WINDOWTITLE eq WaveTrader*" /F >nul 2>&1
+timeout /t 1 /nobreak >nul
+
+:: -----------------------------------------------
+:: 7. Start all services in separate windows
+:: -----------------------------------------------
+echo [7/7] Starting services...
 echo.
 
 :: Backend API (Laravel)
 echo   Starting Laravel API on http://localhost:8000 ...
-start "WaveTrader - Backend API" cmd /k "cd /d %~dp0backend && php artisan serve --host=0.0.0.0 --port=8000"
-
-:: Wait a moment for backend to start
-timeout /t 2 /nobreak >nul
+start "WaveTrader - Backend API" /D "%BACKEND_DIR%" cmd /k "php artisan serve --host=0.0.0.0 --port=8000"
+timeout /t 3 /nobreak >nul
 
 :: Laravel Reverb (WebSocket server)
 echo   Starting Reverb WebSocket on ws://localhost:8085 ...
-start "WaveTrader - Reverb WebSocket" cmd /k "cd /d %~dp0backend && php artisan reverb:start --port=8085"
+start "WaveTrader - Reverb WebSocket" /D "%BACKEND_DIR%" cmd /k "php artisan reverb:start --port=8085"
+timeout /t 2 /nobreak >nul
 
-:: Laravel Horizon (Queue worker)
-echo   Starting Horizon queue worker...
-start "WaveTrader - Horizon Queue" cmd /k "cd /d %~dp0backend && php artisan horizon"
+:: Laravel Queue Worker (processes candle fetch + engine jobs)
+echo   Starting Queue Worker...
+start "WaveTrader - Queue Worker" /D "%BACKEND_DIR%" cmd /k "php artisan queue:work redis --queue=default,engines --sleep=3 --tries=3"
+timeout /t 1 /nobreak >nul
 
 :: Frontend (Vite dev server)
 echo   Starting Vue frontend on http://localhost:5173 ...
-start "WaveTrader - Frontend" cmd /k "cd /d %~dp0frontend && npm run dev"
+start "WaveTrader - Frontend" /D "%FRONTEND_DIR%" cmd /k "npm run dev"
+timeout /t 3 /nobreak >nul
 
 :: -----------------------------------------------
-:: 7. Done
+:: Done
 :: -----------------------------------------------
 echo.
-echo [7/7] All services started!
+echo ============================================
+echo   All Services Started Successfully!
+echo ============================================
 echo.
-echo ============================================
-echo   Services Running:
-echo ============================================
 echo   Backend API:    http://localhost:8000
 echo   Frontend SPA:   http://localhost:5173
 echo   WebSocket:      ws://localhost:8085
@@ -136,13 +154,10 @@ echo   PostgreSQL:     localhost:5432
 echo   Redis:          localhost:6379
 echo ============================================
 echo.
-echo   Press any key to open the app in browser...
-pause >nul
-
+echo   Opening browser...
+timeout /t 2 /nobreak >nul
 start http://localhost:5173
-
 echo.
-echo   To stop all services, close the terminal windows
-echo   or run: stop.bat
-echo.
-pause
+echo   To stop all services run: stop.bat
+echo   Press any key to exit this window...
+pause >nul
