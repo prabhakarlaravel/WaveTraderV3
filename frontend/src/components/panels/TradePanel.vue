@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
+import axios from 'axios'
 import { useTradeStore } from '../../stores/useTradeStore'
 import { useChartStore } from '../../stores/useChartStore'
 
@@ -14,6 +15,7 @@ const notesInput = ref('')
 const submitting = ref(false)
 const autoTrading = ref(false)
 const autoResult = ref(null)
+const minConfluence = ref(55)
 
 const currentPrice = computed(() => {
   const c = chartStore.candles
@@ -66,6 +68,108 @@ function submitTrade() {
     notesInput.value = ''
   } finally {
     submitting.value = false
+  }
+}
+
+async function runAutoTrade() {
+  if (!chartStore.activeSymbolId || !currentPrice.value) return
+  autoTrading.value = true
+  autoResult.value = null
+
+  try {
+    // Fetch fresh overlays (includes confluence scoring)
+    const { data: overlays } = await axios.get('/api/v1/chart/overlays', {
+      params: {
+        symbol_id: chartStore.activeSymbolId,
+        timeframe: chartStore.activeTimeframe,
+      },
+    })
+
+    const confluence = overlays.confluence
+    if (!confluence) {
+      autoResult.value = { action: 'no_data', reason: 'No confluence data available' }
+      return
+    }
+
+    const score = confluence.pct || 0
+    const dir = confluence.direction
+    const action = confluence.action || ''
+
+    // Check if score meets minimum threshold
+    if (score < minConfluence.value) {
+      autoResult.value = {
+        action: 'skip',
+        reason: `Score ${score}% < min ${minConfluence.value}%. ${action}`,
+        score,
+        direction: dir,
+      }
+      return
+    }
+
+    if (dir === 'NEUTRAL') {
+      autoResult.value = { action: 'skip', reason: `Neutral direction (${score}%). Wait for clarity.`, score }
+      return
+    }
+
+    // Determine trade direction
+    const tradeType = dir === 'BULL' ? 'long' : 'short'
+    const price = currentPrice.value
+
+    // Calculate SL/TP from nearby OB levels or ATR-based fallback
+    let sl = null
+    let tp = null
+
+    const obs = overlays.orderBlocks || []
+    const freshObs = obs.filter(ob => ob.status === 'fresh' || ob.status === 'partially_mitigated')
+
+    // Max SL distance: 3% of price, max TP: 5% of price
+    const maxSlDist = price * 0.03
+    const maxTpDist = price * 0.05
+
+    if (tradeType === 'long') {
+      // SL below nearest bullish OB low, TP at nearest bearish OB high
+      const bullObs = freshObs.filter(ob => ob.type === 'bullish' && ob.high <= price && (price - ob.low) <= maxSlDist)
+        .sort((a, b) => b.high - a.high)
+      const bearObs = freshObs.filter(ob => ob.type === 'bearish' && ob.low > price && (ob.high - price) <= maxTpDist)
+        .sort((a, b) => a.low - b.low)
+      sl = bullObs.length ? bullObs[0].low : price * 0.985
+      tp = bearObs.length ? bearObs[0].high : price * 1.03
+    } else {
+      // SL above nearest bearish OB high, TP at nearest bullish OB low
+      const bearObs = freshObs.filter(ob => ob.type === 'bearish' && ob.low >= price && (ob.high - price) <= maxSlDist)
+        .sort((a, b) => a.low - b.low)
+      const bullObs = freshObs.filter(ob => ob.type === 'bullish' && ob.high <= price && (price - ob.low) <= maxTpDist)
+        .sort((a, b) => b.high - a.high)
+      sl = bearObs.length ? bearObs[0].high : price * 1.015
+      tp = bullObs.length ? bullObs[0].low : price * 0.97
+    }
+
+    // Open the trade locally
+    const trade = tradeStore.openTrade({
+      symbol_id: chartStore.activeSymbolId,
+      symbol_ticker: chartStore.activeSymbol?.ticker || '',
+      type: tradeType,
+      entry_price: price,
+      quantity: quantity.value,
+      sl: Math.round(sl * 100) / 100,
+      tp: Math.round(tp * 100) / 100,
+      notes: `Auto: ${action} (${score}%)`,
+      timeframe: chartStore.activeTimeframe,
+      engine: 'confluence',
+      confluence_score: score,
+      auto_trade: true,
+    })
+
+    autoResult.value = {
+      action: 'trade_opened',
+      trade,
+      score,
+      reason: action,
+    }
+  } catch (err) {
+    autoResult.value = { action: 'error', reason: err.message || 'Failed to analyze' }
+  } finally {
+    autoTrading.value = false
   }
 }
 
@@ -156,6 +260,38 @@ function formatPnl(val) {
           : 'background: var(--bear); color: #fff'">
         {{ submitting ? 'Placing...' : `${direction === 'long' ? 'BUY' : 'SELL'} @ ${formatPrice(currentPrice)}` }}
       </button>
+
+      <!-- Auto trade -->
+      <button @click="runAutoTrade" :disabled="autoTrading"
+        class="w-full rounded-md py-2 text-[10px] font-semibold uppercase tracking-wider"
+        style="background: var(--accent-bg); border: 1px solid rgba(59,130,246,0.3); color: var(--accent)">
+        {{ autoTrading ? 'Analyzing...' : `Auto Trade (min ${minConfluence}%)` }}
+      </button>
+
+      <!-- Auto trade result -->
+      <div v-if="autoResult" class="rounded-md px-3 py-2 text-[10px]"
+        :style="{
+          background: autoResult.action === 'trade_opened' ? 'rgba(0,220,130,0.08)' : 'rgba(100,100,100,0.08)',
+          border: '1px solid ' + (autoResult.action === 'trade_opened' ? 'rgba(0,220,130,0.2)' : 'var(--border)'),
+          color: autoResult.action === 'trade_opened' ? 'var(--bull)' : 'var(--dim)'
+        }">
+        <template v-if="autoResult.action === 'trade_opened'">
+          ✅ Opened {{ autoResult.trade?.type?.toUpperCase() }} @ {{ formatPrice(autoResult.trade?.entry_price) }}
+          <span style="color: var(--accent)"> ({{ autoResult.score }}%)</span>
+          <div style="color: var(--muted); margin-top: 2px">
+            SL: {{ formatPrice(autoResult.trade?.sl) }} · TP: {{ formatPrice(autoResult.trade?.tp) }}
+          </div>
+        </template>
+        <template v-else-if="autoResult.action === 'skip'">
+          ⏸ {{ autoResult.reason }}
+        </template>
+        <template v-else-if="autoResult.action === 'error'">
+          ❌ {{ autoResult.reason }}
+        </template>
+        <template v-else>
+          ℹ️ {{ autoResult.reason }}
+        </template>
+      </div>
     </div>
 
     <!-- Open Positions -->
