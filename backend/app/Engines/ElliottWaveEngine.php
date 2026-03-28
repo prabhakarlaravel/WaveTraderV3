@@ -63,6 +63,9 @@ class ElliottWaveEngine implements EngineInterface
         // Step 7: Calculate next wave targets + invalidation
         $nextTargets = $this->calculateNextWaveTargets($waveCounts);
 
+        // Step 8: Estimate wave completion time
+        $timeEstimate = $this->estimateWaveTime($waveCounts, $timeframe);
+
         return new EngineResult(
             engine: 'elliott_wave',
             symbol: $symbol,
@@ -72,6 +75,7 @@ class ElliottWaveEngine implements EngineInterface
                 'waveLabels' => $waveLabels,
                 'fibTargets' => $fibTargets,
                 'nextTargets' => $nextTargets,
+                'timeEstimate' => $timeEstimate,
                 'waveLine' => array_map(fn ($w) => [
                     'price' => $w['price'],
                     'timestamp' => $w['timestamp'],
@@ -566,6 +570,156 @@ class ElliottWaveEngine implements EngineInterface
             'targets' => $targets,
             'invalidation' => $invalidation,
             'retracements' => $retracements,
+        ];
+    }
+
+    /**
+     * Estimate wave completion time using Fibonacci time ratios.
+     * Calculates duration of each completed wave and projects remaining time.
+     */
+    private function estimateWaveTime(array $waves, string $timeframe): array
+    {
+        if (count($waves) < 2) {
+            return ['durations' => [], 'estimate' => null];
+        }
+
+        // Calculate duration of each completed wave in minutes
+        $durations = [];
+        for ($i = 1; $i < count($waves); $i++) {
+            $start = \Carbon\Carbon::parse($waves[$i - 1]['timestamp']);
+            $end = \Carbon\Carbon::parse($waves[$i]['timestamp']);
+            $minutes = $start->diffInMinutes($end);
+            $durations[] = [
+                'from' => $waves[$i - 1]['label'],
+                'to' => $waves[$i]['label'],
+                'minutes' => $minutes,
+                'startTime' => $waves[$i - 1]['timestamp'],
+                'endTime' => $waves[$i]['timestamp'],
+            ];
+        }
+
+        $currentWave = end($waves);
+        $currentLabel = $currentWave['label'];
+        $currentStart = \Carbon\Carbon::parse($currentWave['timestamp']);
+        $elapsed = $currentStart->diffInMinutes(now()->utc());
+
+        // Fibonacci time ratios for wave duration estimation
+        $w1Duration = null;
+        $w3Duration = null;
+        $wADuration = null;
+        $prevWaveDuration = null;
+
+        foreach ($durations as $d) {
+            if ($d['from'] === '1' && $d['to'] === '2') $w1Duration = $d['minutes'];
+            if ($d['from'] === '3' || ($d['from'] === '2' && $d['to'] === '3')) $w3Duration = $d['minutes'];
+            if ($d['from'] === 'A' || ($d['from'] === '5' && $d['to'] === 'A')) $wADuration = $d['minutes'];
+        }
+        if (count($durations) > 0) {
+            $prevWaveDuration = end($durations)['minutes'];
+        }
+
+        // Estimate based on current wave position
+        $primaryMinutes = null;
+        $extendedMinutes = null;
+        $formula = '';
+
+        switch ($currentLabel) {
+            case '1':
+                // Wave 1 just started — no basis for estimate yet
+                $formula = 'First wave — no prior data';
+                break;
+            case '2':
+                if ($w1Duration) {
+                    $primaryMinutes = (int) round($w1Duration * 0.5);
+                    $extendedMinutes = (int) round($w1Duration * 0.618);
+                    $formula = "0.5 × W1 ({$w1Duration}m) = {$primaryMinutes}m";
+                }
+                break;
+            case '3':
+                if ($w1Duration) {
+                    $primaryMinutes = (int) round($w1Duration * 1.618);
+                    $extendedMinutes = (int) round($w1Duration * 2.618);
+                    $formula = "1.618 × W1 ({$w1Duration}m) = {$primaryMinutes}m";
+                }
+                break;
+            case '4':
+                if ($w3Duration) {
+                    $primaryMinutes = (int) round($w3Duration * 0.382);
+                    $extendedMinutes = (int) round($w3Duration * 0.5);
+                    $formula = "0.382 × W3 ({$w3Duration}m) = {$primaryMinutes}m";
+                } elseif ($w1Duration) {
+                    $primaryMinutes = (int) round($w1Duration * 0.5);
+                    $extendedMinutes = (int) round($w1Duration);
+                    $formula = "0.5 × W1 ({$w1Duration}m) = {$primaryMinutes}m";
+                }
+                break;
+            case '5':
+                if ($w1Duration) {
+                    $primaryMinutes = $w1Duration; // W5 ≈ W1
+                    $extendedMinutes = (int) round($w1Duration * 1.618);
+                    $formula = "W5 = W1 ({$w1Duration}m)";
+                }
+                break;
+            case 'A':
+                if ($w1Duration && $w3Duration) {
+                    $impulseDuration = $w1Duration + $w3Duration;
+                    $primaryMinutes = (int) round($impulseDuration * 0.382);
+                    $extendedMinutes = (int) round($impulseDuration * 0.5);
+                    $formula = "0.382 × impulse ({$impulseDuration}m) = {$primaryMinutes}m";
+                } elseif ($prevWaveDuration) {
+                    $primaryMinutes = $prevWaveDuration;
+                    $extendedMinutes = (int) round($prevWaveDuration * 1.618);
+                    $formula = "≈ prev wave ({$prevWaveDuration}m)";
+                }
+                break;
+            case 'B':
+                if ($wADuration) {
+                    $primaryMinutes = (int) round($wADuration * 0.5);
+                    $extendedMinutes = (int) round($wADuration * 0.786);
+                    $formula = "0.5 × W(A) ({$wADuration}m) = {$primaryMinutes}m";
+                } elseif ($prevWaveDuration) {
+                    $primaryMinutes = (int) round($prevWaveDuration * 0.618);
+                    $extendedMinutes = $prevWaveDuration;
+                    $formula = "0.618 × prev ({$prevWaveDuration}m) = {$primaryMinutes}m";
+                }
+                break;
+            case 'C':
+                if ($wADuration) {
+                    $primaryMinutes = $wADuration; // C ≈ A
+                    $extendedMinutes = (int) round($wADuration * 1.618);
+                    $formula = "C = A ({$wADuration}m)";
+                }
+                break;
+        }
+
+        $remaining = null;
+        $primaryEta = null;
+        $extendedEta = null;
+        $progressPct = 0;
+
+        if ($primaryMinutes !== null) {
+            $remaining = max(0, $primaryMinutes - $elapsed);
+            $primaryEta = now()->utc()->addMinutes($remaining)->toIso8601String();
+            $extendedEta = $extendedMinutes
+                ? now()->utc()->addMinutes(max(0, $extendedMinutes - $elapsed))->toIso8601String()
+                : null;
+            $progressPct = $primaryMinutes > 0 ? min(100, round($elapsed / $primaryMinutes * 100)) : 0;
+        }
+
+        return [
+            'currentWave' => $currentLabel,
+            'currentWaveStart' => $currentWave['timestamp'],
+            'elapsed' => $elapsed,
+            'durations' => $durations,
+            'estimate' => $primaryMinutes ? [
+                'primaryMinutes' => $primaryMinutes,
+                'extendedMinutes' => $extendedMinutes,
+                'remaining' => $remaining,
+                'primaryEta' => $primaryEta,
+                'extendedEta' => $extendedEta,
+                'progressPct' => $progressPct,
+                'formula' => $formula,
+            ] : null,
         ];
     }
 

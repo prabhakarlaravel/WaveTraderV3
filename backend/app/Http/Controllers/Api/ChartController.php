@@ -220,6 +220,7 @@ class ChartController extends Controller
             'patterns' => $paResult->overlays['patterns'] ?? [],
             'fibTargets' => $ewResult->overlays['fibTargets'] ?? [],
             'nextTargets' => $ewResult->overlays['nextTargets'] ?? [],
+            'timeEstimate' => $ewResult->overlays['timeEstimate'] ?? [],
             'liquidityPools' => $smcResult->overlays['liquidityPools'] ?? [],
             'oteZones' => $smcResult->overlays['oteZones'] ?? [],
             'premiumDiscount' => $smcResult->overlays['premiumDiscount'] ?? [],

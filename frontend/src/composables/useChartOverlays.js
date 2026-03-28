@@ -88,6 +88,7 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     if (toggles.bos) renderBos(overlays.bos || [], svg)
     if (toggles.waves) renderWaveLabels(overlays.waveLabels || [], svg)
     if (toggles.waves) renderWaveTargets(overlays.nextTargets || {}, svg, w)
+    if (toggles.waves) renderWaveTimeEstimate(overlays.timeEstimate || {}, svg, w, h)
     if (toggles.signals) { try { renderSignalMarkers() } catch (e) { /* markers may fail if series not ready */ } }
 
     // Render user drawings (injected from useDrawingTools)
@@ -571,6 +572,149 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
       retLabel.textContent = `${(r.level * 100).toFixed(1)}%`
       svg.appendChild(retLabel)
     })
+  }
+
+  // ── Wave time estimation overlay (countdown + ETA + progress) ──
+  function renderWaveTimeEstimate(timeEstimate, svg, chartWidth, chartHeight) {
+    if (!timeEstimate || !timeEstimate.estimate) return
+    const est = timeEstimate.estimate
+    const currentWave = timeEstimate.currentWave
+    const elapsed = timeEstimate.elapsed || 0
+    const remaining = est.remaining || 0
+    const progressPct = est.progressPct || 0
+
+    // ETA info box (bottom-right corner of chart)
+    const boxW = 155
+    const boxH = 72
+    const boxX = chartWidth - boxW - 8
+    const boxY = chartHeight - boxH - 30
+
+    // Background
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+    bg.setAttribute('x', boxX)
+    bg.setAttribute('y', boxY)
+    bg.setAttribute('width', boxW)
+    bg.setAttribute('height', boxH)
+    bg.setAttribute('rx', '6')
+    bg.setAttribute('fill', 'rgba(11,17,32,0.92)')
+    bg.setAttribute('stroke', '#1e293b')
+    bg.setAttribute('stroke-width', '1')
+    svg.appendChild(bg)
+
+    // Title
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+    title.setAttribute('x', boxX + 8)
+    title.setAttribute('y', boxY + 13)
+    title.setAttribute('fill', '#555')
+    title.setAttribute('font-size', '7')
+    title.setAttribute('font-weight', '700')
+    title.textContent = `⏱ WAVE ${currentWave} TIME`
+    svg.appendChild(title)
+
+    // Countdown (big number)
+    const countdownColor = remaining <= 0 ? '#ef5350' : remaining < 10 ? '#fbbf24' : '#34d399'
+    const countdownText = remaining <= 0 ? 'COMPLETING' : `${remaining}m left`
+    const cd = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+    cd.setAttribute('x', boxX + 8)
+    cd.setAttribute('y', boxY + 30)
+    cd.setAttribute('fill', countdownColor)
+    cd.setAttribute('font-size', '14')
+    cd.setAttribute('font-weight', '900')
+    cd.setAttribute('font-family', 'monospace')
+    cd.textContent = countdownText
+    // Add pulse animation if near completion
+    if (remaining <= 5) {
+      const anim = document.createElementNS('http://www.w3.org/2000/svg', 'animate')
+      anim.setAttribute('attributeName', 'opacity')
+      anim.setAttribute('values', '1;0.5;1')
+      anim.setAttribute('dur', '1s')
+      anim.setAttribute('repeatCount', 'indefinite')
+      cd.appendChild(anim)
+    }
+    svg.appendChild(cd)
+
+    // Formula
+    const formula = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+    formula.setAttribute('x', boxX + 8)
+    formula.setAttribute('y', boxY + 42)
+    formula.setAttribute('fill', '#666')
+    formula.setAttribute('font-size', '7')
+    formula.textContent = est.formula || ''
+    svg.appendChild(formula)
+
+    // ETA times
+    if (est.primaryEta) {
+      const etaTime = new Date(est.primaryEta).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+      const etaText = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      etaText.setAttribute('x', boxX + 8)
+      etaText.setAttribute('y', boxY + 54)
+      etaText.setAttribute('fill', '#34d399')
+      etaText.setAttribute('font-size', '8')
+      etaText.setAttribute('font-weight', '600')
+      etaText.setAttribute('font-family', 'monospace')
+      etaText.textContent = `ETA: ${etaTime}`
+      svg.appendChild(etaText)
+    }
+
+    // Progress bar
+    const barX = boxX + 8
+    const barY = boxY + 60
+    const barW = boxW - 16
+    const barH = 4
+
+    const barBg = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+    barBg.setAttribute('x', barX)
+    barBg.setAttribute('y', barY)
+    barBg.setAttribute('width', barW)
+    barBg.setAttribute('height', barH)
+    barBg.setAttribute('rx', '2')
+    barBg.setAttribute('fill', '#1a2440')
+    svg.appendChild(barBg)
+
+    const barFill = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+    barFill.setAttribute('x', barX)
+    barFill.setAttribute('y', barY)
+    barFill.setAttribute('width', Math.max(0, barW * progressPct / 100))
+    barFill.setAttribute('height', barH)
+    barFill.setAttribute('rx', '2')
+    barFill.setAttribute('fill', countdownColor)
+    barFill.setAttribute('opacity', '0.7')
+    svg.appendChild(barFill)
+
+    // Progress % label
+    const pctLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+    pctLabel.setAttribute('x', boxX + boxW - 8)
+    pctLabel.setAttribute('y', boxY + 54)
+    pctLabel.setAttribute('text-anchor', 'end')
+    pctLabel.setAttribute('fill', '#555')
+    pctLabel.setAttribute('font-size', '8')
+    pctLabel.setAttribute('font-family', 'monospace')
+    pctLabel.textContent = `${progressPct}%`
+    svg.appendChild(pctLabel)
+
+    // Vertical completion line on the chart (if we can estimate time position)
+    // This requires timeScale coordinate conversion which may not be available,
+    // so we place it as a relative position on the right side of the chart
+    if (remaining > 0 && est.primaryMinutes > 0) {
+      const completionX = Math.min(chartWidth - 20, chartWidth * 0.7 + (chartWidth * 0.25 * progressPct / 100))
+
+      const vLine = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+      vLine.setAttribute('x1', completionX)
+      vLine.setAttribute('y1', '0')
+      vLine.setAttribute('x2', completionX)
+      vLine.setAttribute('y2', chartHeight - 30)
+      vLine.setAttribute('stroke', '#34d399')
+      vLine.setAttribute('stroke-width', '1')
+      vLine.setAttribute('stroke-dasharray', '6 4')
+      vLine.setAttribute('opacity', '0.3')
+      const vAnim = document.createElementNS('http://www.w3.org/2000/svg', 'animate')
+      vAnim.setAttribute('attributeName', 'opacity')
+      vAnim.setAttribute('values', '0.2;0.4;0.2')
+      vAnim.setAttribute('dur', '2s')
+      vAnim.setAttribute('repeatCount', 'indefinite')
+      vLine.appendChild(vAnim)
+      svg.appendChild(vLine)
+    }
   }
 
   // ── Signal markers on candle series ──
