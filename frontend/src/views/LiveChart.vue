@@ -23,6 +23,18 @@ const candleSeriesRef = ref(null)
 let volumeSeries = null
 let resizeObserver = null
 
+// Sync timer — ticks every second to show "Xs ago"
+const nowTick = ref(Date.now())
+let syncTickInterval = null
+const syncAgoText = computed(() => {
+  if (!realtime.lastUpdate) return ''
+  const sec = Math.floor((nowTick.value - new Date(realtime.lastUpdate).getTime()) / 1000)
+  if (sec < 2) return 'just now'
+  if (sec < 60) return `${sec}s ago`
+  const min = Math.floor(sec / 60)
+  return `${min}m ${sec % 60}s ago`
+})
+
 const timeframes = ['1M', '5M', '15M', '1H', '4H', '1D']
 const showMatrix = ref(true)
 const overlayToggles = ref({ waves: true, ob: true, fvg: true, bos: true, vwap: true, signals: true })
@@ -196,7 +208,8 @@ onMounted(async () => {
   renderAll()
 })
 
-onUnmounted(() => { cleanup(); resizeObserver?.disconnect(); chartRef.value?.remove() })
+onMounted(() => { syncTickInterval = setInterval(() => { nowTick.value = Date.now() }, 1000) })
+onUnmounted(() => { cleanup(); resizeObserver?.disconnect(); chartRef.value?.remove(); clearInterval(syncTickInterval) })
 watch(() => chartStore.formattedCandles, () => { updateChartData(); renderAll() })
 watch(overlayToggles, () => renderAll(), { deep: true })
 watch([() => chartStore.activeSymbolId, () => chartStore.activeTimeframe], ([sid, tf]) => {
@@ -258,7 +271,7 @@ watch(() => drawingStore.currentDrawings, () => renderAll(), { deep: true })
 
       <div class="toolbar-sep"></div>
 
-      <!-- Live badge with stale warning -->
+      <!-- Live badge with sync timer -->
       <div class="live-badge" :title="realtime.isStale ? 'Data may be stale (>90s since last update)' : 'Polling every 30s'">
         <div class="live-dot" :style="realtime.isStale
           ? 'background: var(--bear); box-shadow: 0 0 6px var(--bear)'
@@ -269,8 +282,8 @@ watch(() => drawingStore.currentDrawings, () => renderAll(), { deep: true })
         <span class="live-text" :style="realtime.isStale ? 'color: var(--bear)' : ''">
           {{ realtime.isStale ? 'STALE' : 'LIVE' }}
         </span>
-        <span v-if="realtime.lastUpdate" class="live-text" style="color: var(--dim)">
-          {{ new Date(realtime.lastUpdate).toLocaleTimeString('en-US', { hour12: false }) }}
+        <span v-if="realtime.lastUpdate" class="sync-timer" :style="realtime.isStale ? 'color: var(--bear)' : ''">
+          {{ syncAgoText }}
         </span>
         <span class="live-text" style="color: var(--dim); cursor: pointer" @click="realtime.forceRefresh()" title="Force refresh now">&#8635;</span>
       </div>
@@ -471,6 +484,7 @@ watch(() => drawingStore.currentDrawings, () => renderAll(), { deep: true })
   box-shadow: 0 0 6px var(--bull); animation: pulse 2s infinite;
 }
 .live-text { font-size: 10px; color: var(--muted); font-family: var(--mono); }
+.sync-timer { font-size: 10px; color: var(--dim); font-family: var(--mono); min-width: 55px; }
 
 .matrix-toggle {
   display: flex; align-items: center; gap: 5px;
