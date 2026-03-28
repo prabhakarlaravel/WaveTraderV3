@@ -60,13 +60,43 @@ function healthColor(score) {
   return score >= 75 ? '#34d399' : score >= 50 ? '#fbbf24' : '#ef5350'
 }
 
-// Build SVG wave chart points from waveLabels — only last wave cycle (max 16 labels)
+// Build SVG wave chart points from waveLabels
+// Case 1 (default): show only the most recent set starting from wave 1 (max 8 labels)
+// Case 2: if current wave is 1 (first wave plotting), show 2 full sets (up to 16)
+// Case 3: if current wave is 2, show 1 set starting from wave 1
 function buildWaveSvg(waveLabels) {
   if (!waveLabels || waveLabels.length < 3) return null
 
-  // Take only the last complete wave cycle (max 16 labels = 2 cycles of 1-5-A-B-C)
-  const maxLabels = 16
-  const labels = waveLabels.slice(-maxLabels)
+  // Find the start of the most recent wave cycle (last "1" label)
+  let lastWave1Idx = -1
+  let secondLastWave1Idx = -1
+  for (let i = waveLabels.length - 1; i >= 0; i--) {
+    if (waveLabels[i].label === '1') {
+      if (lastWave1Idx === -1) {
+        lastWave1Idx = i
+      } else {
+        secondLastWave1Idx = i
+        break
+      }
+    }
+  }
+
+  const currentWave = waveLabels[waveLabels.length - 1]?.label
+  let labels
+
+  if (currentWave === '1' && secondLastWave1Idx >= 0) {
+    // Case 2: at wave 1 of new cycle — show previous full set + current wave 1
+    labels = waveLabels.slice(secondLastWave1Idx)
+  } else if (lastWave1Idx >= 0) {
+    // Case 1 & 3: show from most recent wave 1 onwards (single set)
+    labels = waveLabels.slice(lastWave1Idx)
+  } else {
+    // Fallback: last 8 labels
+    labels = waveLabels.slice(-8)
+  }
+
+  // Cap at 16 max just in case
+  if (labels.length > 16) labels = labels.slice(-16)
 
   const prices = labels.map(w => w.price)
   const minP = Math.min(...prices)
