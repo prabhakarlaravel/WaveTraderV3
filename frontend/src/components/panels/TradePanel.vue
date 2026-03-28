@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useTradeStore } from '../../stores/useTradeStore'
 import { useChartStore } from '../../stores/useChartStore'
 
@@ -21,54 +21,66 @@ const currentPrice = computed(() => {
   return parseFloat(c[c.length - 1].close)
 })
 
-async function submitTrade() {
+// Unrealized P&L for each open trade (reactive to price changes)
+const unrealizedPnls = computed(() => {
+  const price = currentPrice.value
+  const result = {}
+  for (const trade of tradeStore.openTrades) {
+    result[trade.id] = tradeStore.calcUnrealizedPnl(trade, price)
+  }
+  return result
+})
+
+// Total unrealized P&L across all open positions
+const totalUnrealized = computed(() => tradeStore.totalUnrealizedPnl(currentPrice.value))
+
+// Combined P&L: realized + unrealized
+const combinedPnl = computed(() => tradeStore.totalPnl + totalUnrealized.value)
+
+// Auto-check SL/TP whenever price changes
+watch(currentPrice, (price) => {
+  if (!price || !tradeStore.openTrades.length) return
+  const autoClosed = tradeStore.checkStops(price)
+  if (autoClosed.length) {
+    console.log(`[Trade] Auto-closed ${autoClosed.length} positions at SL/TP`)
+  }
+})
+
+function submitTrade() {
   if (!chartStore.activeSymbolId || !currentPrice.value) return
   submitting.value = true
   try {
-    await tradeStore.openTrade({
+    tradeStore.openTrade({
       symbol_id: chartStore.activeSymbolId,
+      symbol_ticker: chartStore.activeSymbol?.ticker || '',
       type: direction.value,
       entry_price: currentPrice.value,
       quantity: quantity.value,
       sl: slInput.value ? parseFloat(slInput.value) : null,
       tp: tpInput.value ? parseFloat(tpInput.value) : null,
       notes: notesInput.value || null,
+      timeframe: chartStore.activeTimeframe,
     })
     slInput.value = ''
     tpInput.value = ''
+    notesInput.value = ''
   } finally {
     submitting.value = false
   }
 }
 
-async function runAuto() {
-  if (!chartStore.activeSymbolId) return
-  autoTrading.value = true
-  autoResult.value = null
-  try {
-    autoResult.value = await tradeStore.runAutoTrade(
-      chartStore.activeSymbolId,
-      chartStore.activeTimeframe,
-      60
-    )
-  } finally {
-    autoTrading.value = false
-  }
-}
-
-async function closeTrade(trade) {
-  await tradeStore.closeTrade(trade.id, currentPrice.value)
+function closeTrade(trade) {
+  tradeStore.closeTrade(trade.id, currentPrice.value)
 }
 
 function formatPrice(p) {
   return p ? parseFloat(p).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '--'
 }
 
-function tradePnl(trade) {
-  const entry = parseFloat(trade.entry_price)
-  const current = currentPrice.value
-  const mult = trade.type === 'long' ? 1 : -1
-  return ((current - entry) * mult * parseFloat(trade.quantity)).toFixed(2)
+function formatPnl(val) {
+  const n = typeof val === 'number' ? val : parseFloat(val || 0)
+  const sign = n >= 0 ? '+' : ''
+  return `${sign}$${n.toFixed(2)}`
 }
 </script>
 
@@ -144,16 +156,6 @@ function tradePnl(trade) {
           : 'background: var(--bear); color: #fff'">
         {{ submitting ? 'Placing...' : `${direction === 'long' ? 'BUY' : 'SELL'} @ ${formatPrice(currentPrice)}` }}
       </button>
-
-      <!-- Auto trade -->
-      <button @click="runAuto" :disabled="autoTrading"
-        class="w-full rounded-md py-2 text-[10px] font-semibold uppercase tracking-wider"
-        style="background: var(--accent-bg); border: 1px solid rgba(59,130,246,0.3); color: var(--accent)">
-        {{ autoTrading ? 'Analyzing...' : 'Auto Trade (Confluence)' }}
-      </button>
-      <div v-if="autoResult" class="text-[10px] text-center" :style="{ color: autoResult.action === 'trade_opened' ? 'var(--bull)' : 'var(--dim)' }">
-        {{ autoResult.action === 'trade_opened' ? `Opened ${autoResult.trade?.type} @ ${formatPrice(autoResult.trade?.entry_price)}` : autoResult.reason }}
-      </div>
     </div>
 
     <!-- Open Positions -->
@@ -175,25 +177,22 @@ function tradePnl(trade) {
             :style="trade.type === 'long' ? 'background: rgba(0,220,130,0.15); color: var(--bull)' : 'background: rgba(255,59,92,0.15); color: var(--bear)'">
             {{ trade.type.toUpperCase() }}
           </span>
+          <!-- Live unrealized P&L -->
           <span class="text-xs font-bold" style="font-family: var(--mono)"
-            :style="{ color: parseFloat(tradePnl(trade)) >= 0 ? 'var(--bull)' : 'var(--bear)' }">
-            {{ parseFloat(tradePnl(trade)) >= 0 ? '+' : '' }}${{ tradePnl(trade) }}
+            :style="{ color: (unrealizedPnls[trade.id] || 0) >= 0 ? 'var(--bull)' : 'var(--bear)' }">
+            {{ formatPnl(unrealizedPnls[trade.id] || 0) }}
           </span>
         </div>
         <div class="flex items-center justify-between text-[10px]" style="font-family: var(--mono); color: var(--muted)">
           <span>Entry: {{ formatPrice(trade.entry_price) }}</span>
+          <span>Now: {{ formatPrice(currentPrice) }}</span>
           <span>Qty: {{ trade.quantity }}</span>
         </div>
         <div v-if="trade.sl || trade.tp" class="flex gap-3 mt-1 text-[10px]" style="font-family: var(--mono)">
           <span v-if="trade.sl" style="color: var(--bear)">SL: {{ formatPrice(trade.sl) }}</span>
           <span v-if="trade.tp" style="color: var(--bull)">TP: {{ formatPrice(trade.tp) }}</span>
         </div>
-        <div v-if="trade.auto_trade || trade.engine" class="flex gap-2 mt-1 text-[10px]">
-          <span v-if="trade.auto_trade" class="rounded px-1.5 py-0.5" style="background: var(--accent-bg); color: var(--accent)">AUTO</span>
-          <span v-if="trade.engine" style="color: var(--dim)">{{ trade.engine }}</span>
-          <span v-if="trade.confluence_score" style="color: var(--wave)">{{ trade.confluence_score }}%</span>
-        </div>
-        <div v-if="trade.notes" class="mt-1 text-[10px] truncate" style="color: var(--dim)">{{ trade.notes }}</div>
+        <div v-if="trade.notes" class="mt-1 text-[10px] truncate" style="color: var(--dim)">📝 {{ trade.notes }}</div>
         <button @click="closeTrade(trade)"
           class="mt-2 w-full rounded px-2 py-1 text-[10px] font-semibold"
           style="background: rgba(255,59,92,0.1); border: 1px solid rgba(255,59,92,0.25); color: var(--bear)">
@@ -204,17 +203,24 @@ function tradePnl(trade) {
 
     <!-- P&L Summary footer -->
     <div class="px-4 py-3" style="border-top: 1px solid var(--border); background: var(--card)">
-      <div class="grid grid-cols-2 gap-2 text-center">
+      <div class="grid grid-cols-3 gap-2 text-center">
         <div>
-          <div class="text-[10px]" style="color: var(--dim)">Total P&L</div>
-          <div class="text-sm font-bold" style="font-family: var(--mono)"
+          <div class="text-[10px]" style="color: var(--dim)">Realized</div>
+          <div class="text-xs font-bold" style="font-family: var(--mono)"
             :style="{ color: tradeStore.totalPnl >= 0 ? 'var(--bull)' : 'var(--bear)' }">
-            {{ tradeStore.totalPnl >= 0 ? '+' : '' }}${{ tradeStore.totalPnl.toFixed(2) }}
+            {{ formatPnl(tradeStore.totalPnl) }}
+          </div>
+        </div>
+        <div>
+          <div class="text-[10px]" style="color: var(--dim)">Unrealized</div>
+          <div class="text-xs font-bold" style="font-family: var(--mono)"
+            :style="{ color: totalUnrealized >= 0 ? 'var(--bull)' : 'var(--bear)' }">
+            {{ formatPnl(totalUnrealized) }}
           </div>
         </div>
         <div>
           <div class="text-[10px]" style="color: var(--dim)">Win Rate</div>
-          <div class="text-sm font-bold" style="font-family: var(--mono)"
+          <div class="text-xs font-bold" style="font-family: var(--mono)"
             :style="{ color: tradeStore.winRate >= 50 ? 'var(--bull)' : tradeStore.winRate > 0 ? 'var(--bear)' : 'var(--dim)' }">
             {{ tradeStore.winRate }}%
           </div>

@@ -143,25 +143,26 @@ export const useRealtimeStore = defineStore('realtime', () => {
     if (!newCandles || newCandles.length === 0) return
 
     // Merge: update last candle if same timestamp, append new ones
+    const existing = chartStore.candles
     let updated = false
     for (const nc of newCandles) {
-      const existingIdx = existingCandles.findIndex(c => c.timestamp === nc.timestamp)
+      const existingIdx = existing.findIndex(c => c.timestamp === nc.timestamp)
       if (existingIdx >= 0) {
         // Update existing candle (OHLCV may have changed)
-        const old = existingCandles[existingIdx]
+        const old = existing[existingIdx]
         if (old.close !== nc.close || old.high !== nc.high || old.low !== nc.low || old.volume !== nc.volume) {
-          existingCandles[existingIdx] = nc
+          existing[existingIdx] = nc
           updated = true
         }
       } else {
         // New candle — append
-        existingCandles.push(nc)
+        existing.push(nc)
         updated = true
       }
     }
 
     if (updated) {
-      chartStore.candles = [...existingCandles]
+      chartStore.candles = [...existing]
       lastUpdate.value = new Date()
 
       // Also refresh overlays since engines should re-run on new data
