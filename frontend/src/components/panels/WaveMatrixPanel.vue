@@ -1,12 +1,13 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import { useChartStore } from '../../stores/useChartStore'
 
 const chartStore = useChartStore()
 const mtfData = ref(null)
 const loading = ref(false)
-const expandedTf = ref(null) // which TF's wave chart is shown
+const expandedTf = ref(null)
+const lastRefresh = ref(null)
 const timeframes = ['1D', '4H', '1H', '15M', '5M', '1M']
 
 // Auto-expand the active timeframe
@@ -22,12 +23,31 @@ async function fetchMtfWaves() {
       params: { symbol_id: chartStore.activeSymbolId },
     })
     mtfData.value = data
+    lastRefresh.value = new Date()
   } catch { /* ignore */ }
   finally { loading.value = false }
 }
 
 onMounted(fetchMtfWaves)
 watch(() => chartStore.activeSymbolId, fetchMtfWaves)
+
+// Auto-refresh MTF wave data every 30s (aligned with candle polling)
+let refreshInterval = null
+onMounted(() => {
+  refreshInterval = setInterval(() => {
+    if (!loading.value) fetchMtfWaves()
+  }, 30000)
+})
+onUnmounted(() => {
+  if (refreshInterval) clearInterval(refreshInterval)
+})
+
+// Also refresh when overlays update (triggered by WS candle events)
+watch(() => chartStore.overlays, () => {
+  // Debounce: only refresh if last refresh was >10s ago
+  if (lastRefresh.value && (Date.now() - lastRefresh.value.getTime()) < 10000) return
+  fetchMtfWaves()
+}, { deep: false })
 
 // Confluence data from overlays
 const confluence = computed(() => chartStore.overlays?.confluence || null)
@@ -137,6 +157,18 @@ function buildWaveSvg(waveLabels) {
   return { points, fullLine, impLine, corLine, minP, maxP, svgW, svgH }
 }
 
+// Live timer for "last updated X seconds ago"
+const timeSinceRefresh = ref('')
+let timerInterval = null
+onMounted(() => {
+  timerInterval = setInterval(() => {
+    if (!lastRefresh.value) { timeSinceRefresh.value = ''; return }
+    const secs = Math.floor((Date.now() - lastRefresh.value.getTime()) / 1000)
+    timeSinceRefresh.value = secs < 5 ? 'just now' : secs < 60 ? `${secs}s ago` : `${Math.floor(secs/60)}m ago`
+  }, 1000)
+})
+onUnmounted(() => { if (timerInterval) clearInterval(timerInterval) })
+
 function formatPrice(p) {
   return p ? parseFloat(p).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '--'
 }
@@ -144,7 +176,12 @@ function formatPrice(p) {
 
 <template>
   <div class="wm">
-    <div class="wm-title">◈ WAVE MATRIX</div>
+    <div class="wm-title">
+      ◈ WAVE MATRIX
+      <span v-if="lastRefresh" class="wm-live">
+        🔴 LIVE · {{ timeSinceRefresh }}
+      </span>
+    </div>
 
     <!-- Loading -->
     <div v-if="loading && !mtfData" class="loading">Loading wave analysis...</div>
@@ -288,7 +325,9 @@ function formatPrice(p) {
 
 <style scoped>
 .wm { height: 100%; overflow-y: auto; }
-.wm-title { font-size: 12px; font-weight: 700; color: var(--dim); margin-bottom: 10px; padding: 0 4px; }
+.wm-title { font-size: 12px; font-weight: 700; color: var(--dim); margin-bottom: 10px; padding: 0 4px; display: flex; align-items: center; justify-content: space-between; }
+.wm-live { font-size: 8px; color: #ef5350; font-weight: 600; animation: live-pulse 2s infinite; }
+@keyframes live-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 .loading { text-align: center; padding: 20px; font-size: 11px; color: var(--dim); }
 
 /* Action */

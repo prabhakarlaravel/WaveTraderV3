@@ -173,6 +173,16 @@ export const useRealtimeStore = defineStore('realtime', () => {
   /**
    * Handle incoming WebSocket candle update — append or update the last candle.
    */
+  // Debounce overlay refresh to avoid hammering the API on rapid WS events
+  let overlayRefreshTimer = null
+  function scheduleOverlayRefresh() {
+    if (overlayRefreshTimer) clearTimeout(overlayRefreshTimer)
+    overlayRefreshTimer = setTimeout(() => {
+      chartStore.fetchOverlays()
+      console.log('[WS] Overlays refreshed after candle update')
+    }, 2000) // 2s debounce
+  }
+
   function onCandleUpdate(event) {
     const candle = event.candle
     if (!candle) return
@@ -192,7 +202,11 @@ export const useRealtimeStore = defineStore('realtime', () => {
     }
 
     chartStore.candles = [...candles]
+    lastUpdate.value = new Date()
     console.log(`[WS] CandleUpdated via Reverb: ${event.timeframe} @ ${newTimestamp}`)
+
+    // Schedule overlay + wave refresh after debounce
+    scheduleOverlayRefresh()
   }
 
   /**
