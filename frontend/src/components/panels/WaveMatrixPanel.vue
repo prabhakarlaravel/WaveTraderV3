@@ -60,46 +60,51 @@ function healthColor(score) {
   return score >= 75 ? '#34d399' : score >= 50 ? '#fbbf24' : '#ef5350'
 }
 
-// Build SVG wave chart points from waveLabels
+// Build SVG wave chart points from waveLabels — only last wave cycle (max 16 labels)
 function buildWaveSvg(waveLabels) {
   if (!waveLabels || waveLabels.length < 3) return null
 
-  const prices = waveLabels.map(w => w.price)
+  // Take only the last complete wave cycle (max 16 labels = 2 cycles of 1-5-A-B-C)
+  const maxLabels = 16
+  const labels = waveLabels.slice(-maxLabels)
+
+  const prices = labels.map(w => w.price)
   const minP = Math.min(...prices)
   const maxP = Math.max(...prices)
   const range = maxP - minP || 1
 
   const svgW = 340
-  const svgH = 100
-  const padX = 15
-  const padY = 12
+  const svgH = 130
+  const padX = 20
+  const padY = 16
   const usableW = svgW - padX * 2
   const usableH = svgH - padY * 2
 
-  const points = waveLabels.map((w, i) => ({
-    x: padX + (i / (waveLabels.length - 1)) * usableW,
+  const points = labels.map((w, i) => ({
+    x: padX + (i / Math.max(labels.length - 1, 1)) * usableW,
     y: padY + (1 - (w.price - minP) / range) * usableH,
     label: w.label,
     price: w.price,
     isCorrection: w.isCorrection,
-    isCurrent: i === waveLabels.length - 1,
+    isCurrent: i === labels.length - 1,
   }))
 
-  // Split into impulse (1-5) and correction (A-B-C) segments
+  // Build a single connected polyline through all points (the wave path)
+  const fullLine = points.map(p => `${p.x},${p.y}`).join(' ')
+
+  // Also build separate impulse and correction segments for styling
   const impulsePoints = points.filter(p => !p.isCorrection)
   const correctionPoints = points.filter(p => p.isCorrection)
 
-  // Build polyline strings
   const impLine = impulsePoints.map(p => `${p.x},${p.y}`).join(' ')
 
-  // Correction connects from last impulse point
   let corLine = ''
   if (correctionPoints.length > 0 && impulsePoints.length > 0) {
     const lastImp = impulsePoints[impulsePoints.length - 1]
     corLine = [lastImp, ...correctionPoints].map(p => `${p.x},${p.y}`).join(' ')
   }
 
-  return { points, impLine, corLine, minP, maxP, svgW, svgH }
+  return { points, fullLine, impLine, corLine, minP, maxP, svgW, svgH }
 }
 
 function formatPrice(p) {
@@ -180,39 +185,46 @@ function formatPrice(p) {
               class="wave-svg" :viewBox="`0 0 ${buildWaveSvg(getTfRow(tf).waveLabels).svgW} ${buildWaveSvg(getTfRow(tf).waveLabels).svgH}`">
 
               <!-- Grid lines -->
-              <line x1="0" y1="25" :x2="buildWaveSvg(getTfRow(tf).waveLabels).svgW" y2="25" class="grid-line"/>
-              <line x1="0" y1="56" :x2="buildWaveSvg(getTfRow(tf).waveLabels).svgW" y2="56" class="grid-line"/>
-              <line x1="0" y1="87" :x2="buildWaveSvg(getTfRow(tf).waveLabels).svgW" y2="87" class="grid-line"/>
+              <line x1="20" y1="30" :x2="buildWaveSvg(getTfRow(tf).waveLabels).svgW - 10" y2="30" class="grid-line"/>
+              <line x1="20" y1="65" :x2="buildWaveSvg(getTfRow(tf).waveLabels).svgW - 10" y2="65" class="grid-line"/>
+              <line x1="20" y1="100" :x2="buildWaveSvg(getTfRow(tf).waveLabels).svgW - 10" y2="100" class="grid-line"/>
 
               <!-- Price labels -->
-              <text x="2" y="23" class="price-lbl">{{ formatPrice(buildWaveSvg(getTfRow(tf).waveLabels).maxP) }}</text>
-              <text x="2" y="85" class="price-lbl">{{ formatPrice(buildWaveSvg(getTfRow(tf).waveLabels).minP) }}</text>
+              <text x="3" y="33" class="price-lbl">{{ formatPrice(buildWaveSvg(getTfRow(tf).waveLabels).maxP) }}</text>
+              <text x="3" y="103" class="price-lbl">{{ formatPrice(buildWaveSvg(getTfRow(tf).waveLabels).minP) }}</text>
 
-              <!-- Impulse line -->
+              <!-- Full connected wave path (thin gray) -->
+              <polyline :points="buildWaveSvg(getTfRow(tf).waveLabels).fullLine"
+                fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1.5"/>
+
+              <!-- Impulse segments (thick purple) -->
               <polyline v-if="buildWaveSvg(getTfRow(tf).waveLabels).impLine"
                 :points="buildWaveSvg(getTfRow(tf).waveLabels).impLine"
                 class="wave-line imp-line"/>
 
-              <!-- Correction line -->
+              <!-- Correction segments (dashed orange) -->
               <polyline v-if="buildWaveSvg(getTfRow(tf).waveLabels).corLine"
                 :points="buildWaveSvg(getTfRow(tf).waveLabels).corLine"
                 class="wave-line cor-line"/>
 
-              <!-- Wave label circles -->
+              <!-- Wave label circles + text -->
               <template v-for="(pt, idx) in buildWaveSvg(getTfRow(tf).waveLabels).points" :key="idx">
-                <circle :cx="pt.x" :cy="pt.y" r="9"
+                <circle :cx="pt.x" :cy="pt.y" r="10"
                   :class="pt.isCorrection ? 'label-bg-cor' : 'label-bg-imp'"/>
-                <text :x="pt.x" :y="pt.y + 3.5" text-anchor="middle"
+                <text :x="pt.x" :y="pt.y + 4" text-anchor="middle"
                   :class="pt.isCorrection ? 'label-txt-cor' : 'label-txt-imp'">
                   {{ pt.label }}
                 </text>
 
-                <!-- Current position marker (pulsing) -->
-                <circle v-if="pt.isCurrent" :cx="pt.x" :cy="pt.y" r="12"
+                <!-- Current position marker (pulsing white ring) -->
+                <circle v-if="pt.isCurrent" :cx="pt.x" :cy="pt.y" r="14"
                   fill="none" stroke="#fff" stroke-width="1.5" opacity="0.4">
-                  <animate attributeName="r" values="10;14;10" dur="1.5s" repeatCount="indefinite"/>
+                  <animate attributeName="r" values="12;16;12" dur="1.5s" repeatCount="indefinite"/>
                   <animate attributeName="opacity" values="0.2;0.6;0.2" dur="1.5s" repeatCount="indefinite"/>
                 </circle>
+                <!-- "You are here" label for current -->
+                <text v-if="pt.isCurrent" :x="pt.x + 14" :y="pt.y - 6"
+                  style="font-size:7px;fill:#888;font-weight:600">◄ NOW</text>
               </template>
             </svg>
 
@@ -291,8 +303,8 @@ function formatPrice(p) {
 .wr-expand.open { transform: rotate(90deg); color: #8b5cf6; }
 
 /* Wave chart panel */
-.wave-chart-panel { margin: 2px 0 4px; padding: 8px; background: var(--surface); border-radius: 6px; border: 1px solid var(--border); animation: slideDown 0.2s ease; }
-@keyframes slideDown { from { opacity: 0; max-height: 0; } to { opacity: 1; max-height: 200px; } }
+.wave-chart-panel { margin: 2px 0 4px; padding: 8px; background: var(--surface); border-radius: 6px; border: 1px solid var(--border); animation: slideDown 0.3s ease; min-height: 160px; }
+@keyframes slideDown { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 .wc-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
 .wc-tf { font-size: 9px; font-weight: 700; color: #8b5cf6; }
 .wc-phase { font-size: 8px; font-weight: 600; padding: 1px 5px; border-radius: 3px; }
@@ -304,13 +316,13 @@ function formatPrice(p) {
 .wave-svg { width: 100%; display: block; }
 .grid-line { stroke: rgba(255,255,255,0.04); stroke-width: 1; }
 .price-lbl { font-size: 7px; fill: #444; font-family: monospace; }
-.wave-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.wave-line { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
 .imp-line { stroke: #8b5cf6; }
-.cor-line { stroke: #f59e0b; stroke-dasharray: 4 3; }
-.label-bg-imp { fill: rgba(139,92,246,0.15); stroke: rgba(139,92,246,0.4); stroke-width: 1; }
-.label-bg-cor { fill: rgba(245,158,11,0.15); stroke: rgba(245,158,11,0.4); stroke-width: 1; }
-.label-txt-imp { font-size: 8px; font-weight: 800; fill: #a78bfa; font-family: 'DM Sans', sans-serif; }
-.label-txt-cor { font-size: 8px; font-weight: 800; fill: #fbbf24; font-family: 'DM Sans', sans-serif; }
+.cor-line { stroke: #f59e0b; stroke-dasharray: 5 3; }
+.label-bg-imp { fill: rgba(139,92,246,0.2); stroke: rgba(139,92,246,0.5); stroke-width: 1.5; }
+.label-bg-cor { fill: rgba(245,158,11,0.2); stroke: rgba(245,158,11,0.5); stroke-width: 1.5; }
+.label-txt-imp { font-size: 9px; font-weight: 800; fill: #c4b5fd; font-family: 'DM Sans', sans-serif; }
+.label-txt-cor { font-size: 9px; font-weight: 800; fill: #fcd34d; font-family: 'DM Sans', sans-serif; }
 
 /* SL/TP strip */
 .sltp-strip { display: flex; gap: 4px; margin: 0 4px; }
