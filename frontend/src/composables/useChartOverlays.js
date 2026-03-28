@@ -141,15 +141,20 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
       const isBull = ob.type === 'bullish'
       const isFresh = ob.status === 'fresh'
 
+      // Bullish OB (support) = blue, Bearish OB (resistance) = pink
+      const obFill = isBull ? 'rgba(59,130,246,0.12)' : 'rgba(236,72,153,0.12)'
+      const obStroke = isBull ? 'rgba(59,130,246,0.45)' : 'rgba(236,72,153,0.45)'
+      const obTextColor = isBull ? '#3b82f6' : '#ec4899'
+
       // Zone rectangle
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
       rect.setAttribute('x', x1)
       rect.setAttribute('y', rectY)
       rect.setAttribute('width', rectW)
       rect.setAttribute('height', rectH)
-      rect.setAttribute('fill', 'rgba(245,158,11,0.08)')
-      rect.setAttribute('stroke', 'rgba(245,158,11,0.3)')
-      rect.setAttribute('stroke-width', '0.5')
+      rect.setAttribute('fill', obFill)
+      rect.setAttribute('stroke', obStroke)
+      rect.setAttribute('stroke-width', '1')
       rect.setAttribute('rx', '2')
       if (!isFresh) rect.setAttribute('stroke-dasharray', '4 2')
       svg.appendChild(rect)
@@ -160,21 +165,21 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
       accent.setAttribute('x', x1)
       accent.setAttribute('y', accentY)
       accent.setAttribute('width', rectW)
-      accent.setAttribute('height', '2')
-      accent.setAttribute('fill', isBull ? '#00dc82' : '#ff3b5c')
-      accent.setAttribute('opacity', '0.5')
+      accent.setAttribute('height', '2.5')
+      accent.setAttribute('fill', isBull ? '#3b82f6' : '#ec4899')
+      accent.setAttribute('opacity', '0.7')
       accent.setAttribute('rx', '1')
       svg.appendChild(accent)
 
       // Label
       const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
       text.setAttribute('x', x1 + 4)
-      text.setAttribute('y', rectY + 11)
-      text.setAttribute('fill', '#f59e0b')
-      text.setAttribute('font-size', '8')
+      text.setAttribute('y', rectY + 12)
+      text.setAttribute('fill', obTextColor)
+      text.setAttribute('font-size', '9')
       text.setAttribute('font-family', "'JetBrains Mono', monospace")
-      text.setAttribute('font-weight', '600')
-      text.setAttribute('opacity', '0.8')
+      text.setAttribute('font-weight', '700')
+      text.setAttribute('opacity', '1')
       text.textContent = `${isBull ? '▲' : '▼'} OB ${isFresh ? '●' : '○'}`
       svg.appendChild(text)
     }
@@ -200,9 +205,9 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
       rect.setAttribute('y', rectY)
       rect.setAttribute('width', rectW)
       rect.setAttribute('height', rectH)
-      rect.setAttribute('fill', 'rgba(6,182,212,0.07)')
-      rect.setAttribute('stroke', 'rgba(6,182,212,0.25)')
-      rect.setAttribute('stroke-width', '0.5')
+      rect.setAttribute('fill', 'rgba(46,204,113,0.10)')
+      rect.setAttribute('stroke', 'rgba(46,204,113,0.4)')
+      rect.setAttribute('stroke-width', '1')
       rect.setAttribute('rx', '1')
       svg.appendChild(rect)
 
@@ -210,11 +215,11 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
       const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
       text.setAttribute('x', x1 + 4)
       text.setAttribute('y', rectY + 10)
-      text.setAttribute('fill', '#06b6d4')
-      text.setAttribute('font-size', '7')
+      text.setAttribute('fill', '#2ecc71')
+      text.setAttribute('font-size', '9')
       text.setAttribute('font-family', "'JetBrains Mono', monospace")
-      text.setAttribute('font-weight', '600')
-      text.setAttribute('opacity', '0.7')
+      text.setAttribute('font-weight', '700')
+      text.setAttribute('opacity', '1')
       text.textContent = 'FVG'
       svg.appendChild(text)
     }
