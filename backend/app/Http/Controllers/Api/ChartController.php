@@ -219,6 +219,7 @@ class ChartController extends Controller
             'vwap' => $vwapResult->overlays['vwap'] ?? [],
             'patterns' => $paResult->overlays['patterns'] ?? [],
             'fibTargets' => $ewResult->overlays['fibTargets'] ?? [],
+            'nextTargets' => $ewResult->overlays['nextTargets'] ?? [],
             'liquidityPools' => $smcResult->overlays['liquidityPools'] ?? [],
             'oteZones' => $smcResult->overlays['oteZones'] ?? [],
             'premiumDiscount' => $smcResult->overlays['premiumDiscount'] ?? [],

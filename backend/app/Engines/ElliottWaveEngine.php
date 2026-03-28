@@ -60,6 +60,9 @@ class ElliottWaveEngine implements EngineInterface
         // Build signals from wave positions
         $signals = $this->generateSignals($waveCounts, $fibTargets, $timeframe);
 
+        // Step 7: Calculate next wave targets + invalidation
+        $nextTargets = $this->calculateNextWaveTargets($waveCounts);
+
         return new EngineResult(
             engine: 'elliott_wave',
             symbol: $symbol,
@@ -68,6 +71,7 @@ class ElliottWaveEngine implements EngineInterface
             overlays: [
                 'waveLabels' => $waveLabels,
                 'fibTargets' => $fibTargets,
+                'nextTargets' => $nextTargets,
                 'waveLine' => array_map(fn ($w) => [
                     'price' => $w['price'],
                     'timestamp' => $w['timestamp'],
@@ -377,6 +381,192 @@ class ElliottWaveEngine implements EngineInterface
         }
 
         return $targets;
+    }
+
+    /**
+     * Calculate next wave targets and invalidation based on current wave position.
+     * Returns targets for the NEXT expected wave with price levels and colors.
+     */
+    private function calculateNextWaveTargets(array $waves): array
+    {
+        if (count($waves) < 2) {
+            return ['targets' => [], 'invalidation' => null, 'nextWave' => null, 'retracements' => []];
+        }
+
+        $byLabel = [];
+        foreach ($waves as $w) {
+            $byLabel[$w['label']] = $w;
+        }
+
+        $currentWave = end($waves)['label'];
+        $targets = [];
+        $invalidation = null;
+        $nextWave = null;
+        $retracements = [];
+
+        // Determine trend direction from wave 1→2
+        $isBullish = true;
+        if (isset($byLabel['1'], $byLabel['2'])) {
+            $isBullish = $byLabel['2']['price'] > $byLabel['1']['price'];
+        }
+        $dir = $isBullish ? 1 : -1;
+
+        switch ($currentWave) {
+            case '1':
+                // After W1: expect W2 retracement (50%, 61.8%, 78.6% of W1)
+                $nextWave = '2';
+                $w1Start = $byLabel['1']['price'];
+                $w1End = end($waves)['price']; // W1 end = current position
+                $w1Len = abs($w1End - $w1Start);
+
+                foreach ([0.382, 0.5, 0.618, 0.786] as $level) {
+                    $price = $w1End - $w1Len * $level * $dir;
+                    $type = $level === 0.618 ? 'primary' : ($level === 0.5 ? 'secondary' : 'extended');
+                    $color = $type === 'primary' ? '#34d399' : ($type === 'secondary' ? '#8b5cf6' : '#f59e0b');
+                    $targets[] = [
+                        'label' => "W2 retrace ({$level})",
+                        'price' => round($price, 2),
+                        'fib' => $level,
+                        'type' => $type,
+                        'color' => $color,
+                    ];
+                }
+                // Invalidation: W2 must not go beyond W1 start
+                $invalidation = ['price' => round($w1Start, 2), 'rule' => 'W2 cannot retrace beyond W1 start'];
+                break;
+
+            case '2':
+                // After W2: expect W3 extension (1.0, 1.618, 2.618 × W1 from W2 end)
+                $nextWave = '3';
+                if (isset($byLabel['1'])) {
+                    $w1Start = $byLabel['1']['price'];
+                    $w1End = $byLabel['2']['price'] ?? end($waves)['price'];
+                    $w1Len = abs($w1End - $w1Start);
+                    $w2End = end($waves)['price'];
+
+                    $targets[] = ['label' => 'W3 = 1.0 × W1', 'price' => round($w2End + $w1Len * 1.0 * $dir, 2), 'fib' => 1.0, 'type' => 'secondary', 'color' => '#8b5cf6'];
+                    $targets[] = ['label' => 'W3 = 1.618 × W1', 'price' => round($w2End + $w1Len * 1.618 * $dir, 2), 'fib' => 1.618, 'type' => 'primary', 'color' => '#34d399'];
+                    $targets[] = ['label' => 'W3 = 2.618 × W1', 'price' => round($w2End + $w1Len * 2.618 * $dir, 2), 'fib' => 2.618, 'type' => 'extended', 'color' => '#f59e0b'];
+
+                    $invalidation = ['price' => round($byLabel['1']['price'], 2), 'rule' => 'W3 must not end below W1 start'];
+                }
+                break;
+
+            case '3':
+                // After W3: expect W4 retracement (38.2%, 50% of W3)
+                $nextWave = '4';
+                if (isset($byLabel['2'])) {
+                    $w2End = $byLabel['2']['price'];
+                    $w3End = end($waves)['price'];
+                    $w3Len = abs($w3End - $w2End);
+
+                    $targets[] = ['label' => 'W4 retrace (0.236)', 'price' => round($w3End - $w3Len * 0.236 * $dir, 2), 'fib' => 0.236, 'type' => 'extended', 'color' => '#f59e0b'];
+                    $targets[] = ['label' => 'W4 retrace (0.382)', 'price' => round($w3End - $w3Len * 0.382 * $dir, 2), 'fib' => 0.382, 'type' => 'primary', 'color' => '#34d399'];
+                    $targets[] = ['label' => 'W4 retrace (0.5)', 'price' => round($w3End - $w3Len * 0.5 * $dir, 2), 'fib' => 0.5, 'type' => 'secondary', 'color' => '#8b5cf6'];
+
+                    // Invalidation: W4 must not overlap W1 territory
+                    if (isset($byLabel['1'])) {
+                        $w1End = $byLabel['2']['price']; // W1 end = W2 start
+                        $invalidation = ['price' => round($w1End, 2), 'rule' => 'W4 must not overlap W1 territory'];
+                    }
+                }
+                break;
+
+            case '4':
+                // After W4: expect W5 extension
+                $nextWave = '5';
+                if (isset($byLabel['1'], $byLabel['2'])) {
+                    $w1Start = $byLabel['1']['price'];
+                    $w1End = $byLabel['2']['price'];
+                    $w1Len = abs($w1End - $w1Start);
+                    $w4End = end($waves)['price'];
+
+                    // W5 = W1 length
+                    $targets[] = ['label' => 'W5 = W1 (1.0)', 'price' => round($w4End + $w1Len * 1.0 * $dir, 2), 'fib' => 1.0, 'type' => 'secondary', 'color' => '#8b5cf6'];
+
+                    // W5 = 0.618 × (W1 to W3)
+                    if (isset($byLabel['3'])) {
+                        $w3End = $byLabel['3']['price'];
+                        $w13Len = abs($w3End - $w1Start);
+                        $targets[] = ['label' => 'W5 = 0.618 (W1-3)', 'price' => round($w4End + $w13Len * 0.618 * $dir, 2), 'fib' => 0.618, 'type' => 'primary', 'color' => '#34d399'];
+                    }
+
+                    // W5 = 1.618 × W1 (extended)
+                    $targets[] = ['label' => 'W5 = 1.618 × W1', 'price' => round($w4End + $w1Len * 1.618 * $dir, 2), 'fib' => 1.618, 'type' => 'extended', 'color' => '#f59e0b'];
+
+                    // Invalidation: W5 should not fail below W4 start (= W3 end)
+                    if (isset($byLabel['3'])) {
+                        $invalidation = ['price' => round($byLabel['3']['price'], 2), 'rule' => 'W5 must not fail below W3 end'];
+                    }
+                }
+                break;
+
+            case '5':
+                // After W5: expect correction A-B-C
+                $nextWave = 'A';
+                $w5End = end($waves)['price'];
+                if (isset($byLabel['1'])) {
+                    $impLen = abs($w5End - $byLabel['1']['price']);
+                    $corrDir = -$dir;
+
+                    $targets[] = ['label' => 'Corr. retrace (0.382)', 'price' => round($w5End + $impLen * 0.382 * $corrDir, 2), 'fib' => 0.382, 'type' => 'secondary', 'color' => '#8b5cf6'];
+                    $targets[] = ['label' => 'Corr. retrace (0.5)', 'price' => round($w5End + $impLen * 0.5 * $corrDir, 2), 'fib' => 0.5, 'type' => 'primary', 'color' => '#34d399'];
+                    $targets[] = ['label' => 'Corr. retrace (0.618)', 'price' => round($w5End + $impLen * 0.618 * $corrDir, 2), 'fib' => 0.618, 'type' => 'extended', 'color' => '#f59e0b'];
+                }
+                break;
+
+            case 'A':
+                // After A: expect B bounce (50-78.6% of A)
+                $nextWave = 'B';
+                if (isset($byLabel['5'])) {
+                    $w5End = $byLabel['5']['price'];
+                    $aEnd = end($waves)['price'];
+                    $aLen = abs($aEnd - $w5End);
+                    $bounceDir = -$dir; // B goes against correction direction
+
+                    $targets[] = ['label' => 'B retrace (0.5)', 'price' => round($aEnd - $aLen * 0.5 * $dir, 2), 'fib' => 0.5, 'type' => 'secondary', 'color' => '#8b5cf6'];
+                    $targets[] = ['label' => 'B retrace (0.618)', 'price' => round($aEnd - $aLen * 0.618 * $dir, 2), 'fib' => 0.618, 'type' => 'primary', 'color' => '#34d399'];
+                    $targets[] = ['label' => 'B retrace (0.786)', 'price' => round($aEnd - $aLen * 0.786 * $dir, 2), 'fib' => 0.786, 'type' => 'extended', 'color' => '#f59e0b'];
+                }
+                break;
+
+            case 'B':
+                // After B: expect C (typically = A or 1.618 × A)
+                $nextWave = 'C';
+                if (isset($byLabel['A'])) {
+                    $aStart = $byLabel['5']['price'] ?? $byLabel['A']['price'];
+                    $aEnd = $byLabel['A']['price'];
+                    $aLen = abs($aEnd - $aStart);
+                    $bEnd = end($waves)['price'];
+
+                    $targets[] = ['label' => 'C = A (1.0)', 'price' => round($bEnd + $aLen * 1.0 * (-$dir), 2), 'fib' => 1.0, 'type' => 'primary', 'color' => '#34d399'];
+                    $targets[] = ['label' => 'C = 1.618 × A', 'price' => round($bEnd + $aLen * 1.618 * (-$dir), 2), 'fib' => 1.618, 'type' => 'extended', 'color' => '#f59e0b'];
+                }
+                break;
+        }
+
+        // Add retracement lines for context (between last two waves)
+        if (count($waves) >= 2) {
+            $prev = $waves[count($waves) - 2];
+            $curr = end($waves);
+            $moveLen = abs($curr['price'] - $prev['price']);
+            $moveDir = $curr['price'] > $prev['price'] ? -1 : 1;
+
+            foreach ([0.236, 0.382, 0.5, 0.618, 0.786] as $level) {
+                $retracements[] = [
+                    'level' => $level,
+                    'price' => round($curr['price'] + $moveLen * $level * $moveDir, 2),
+                ];
+            }
+        }
+
+        return [
+            'nextWave' => $nextWave,
+            'currentWave' => $currentWave,
+            'targets' => $targets,
+            'invalidation' => $invalidation,
+            'retracements' => $retracements,
+        ];
     }
 
     /**

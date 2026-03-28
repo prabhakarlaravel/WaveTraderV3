@@ -87,6 +87,7 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     if (toggles.ob) renderLiquidityPools(overlays.liquidityPools || [], svg, w)
     if (toggles.bos) renderBos(overlays.bos || [], svg)
     if (toggles.waves) renderWaveLabels(overlays.waveLabels || [], svg)
+    if (toggles.waves) renderWaveTargets(overlays.nextTargets || {}, svg, w)
     if (toggles.signals) { try { renderSignalMarkers() } catch (e) { /* markers may fail if series not ready */ } }
 
     // Render user drawings (injected from useDrawingTools)
@@ -399,6 +400,177 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
       text.textContent = `${pool.type} ${pool.swept ? '✗' : '●'}`
       svg.appendChild(text)
     }
+  }
+
+  // ── Wave target projections (fib zones + invalidation) ──
+  function renderWaveTargets(nextTargets, svg, chartWidth) {
+    if (!nextTargets || !nextTargets.targets || nextTargets.targets.length === 0) return
+    if (!candleSeriesRef.value) return
+
+    const targets = nextTargets.targets
+    const invalidation = nextTargets.invalidation
+    const nextWave = nextTargets.nextWave
+    const retracements = nextTargets.retracements || []
+
+    // Render each target zone
+    targets.forEach((t, i) => {
+      const y = candleSeriesRef.value.priceToCoordinate(t.price)
+      if (y === null || y < 0 || y > 2000) return
+
+      const color = t.color || '#8b5cf6'
+      const isPrimary = t.type === 'primary'
+      const opacity = isPrimary ? 0.2 : 0.12
+      const lineOpacity = isPrimary ? 0.7 : 0.4
+      const zoneHeight = isPrimary ? 16 : 10
+
+      // Target zone rectangle (pulsing)
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+      rect.setAttribute('x', chartWidth * 0.6)
+      rect.setAttribute('y', y - zoneHeight / 2)
+      rect.setAttribute('width', chartWidth * 0.4)
+      rect.setAttribute('height', zoneHeight)
+      rect.setAttribute('rx', '2')
+      rect.setAttribute('fill', color)
+      rect.setAttribute('opacity', opacity)
+      if (isPrimary) {
+        const anim = document.createElementNS('http://www.w3.org/2000/svg', 'animate')
+        anim.setAttribute('attributeName', 'opacity')
+        anim.setAttribute('values', `${opacity};${opacity * 2};${opacity}`)
+        anim.setAttribute('dur', '2s')
+        anim.setAttribute('repeatCount', 'indefinite')
+        rect.appendChild(anim)
+      }
+      svg.appendChild(rect)
+
+      // Dashed target line
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+      line.setAttribute('x1', chartWidth * 0.4)
+      line.setAttribute('y1', y)
+      line.setAttribute('x2', chartWidth)
+      line.setAttribute('y2', y)
+      line.setAttribute('stroke', color)
+      line.setAttribute('stroke-width', isPrimary ? '1.5' : '1')
+      line.setAttribute('stroke-dasharray', '6 4')
+      line.setAttribute('opacity', lineOpacity)
+      svg.appendChild(line)
+
+      // Price badge on right edge
+      const badgeW = 65
+      const badgeH = 14
+      const badgeX = chartWidth - badgeW - 4
+      const badgeY = y - badgeH / 2
+
+      const badge = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+      badge.setAttribute('x', badgeX)
+      badge.setAttribute('y', badgeY)
+      badge.setAttribute('width', badgeW)
+      badge.setAttribute('height', badgeH)
+      badge.setAttribute('rx', '3')
+      badge.setAttribute('fill', color)
+      badge.setAttribute('opacity', '0.25')
+      badge.setAttribute('stroke', color)
+      badge.setAttribute('stroke-width', '0.5')
+      badge.setAttribute('stroke-opacity', '0.5')
+      svg.appendChild(badge)
+
+      const priceText = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      priceText.setAttribute('x', badgeX + badgeW / 2)
+      priceText.setAttribute('y', y + 3.5)
+      priceText.setAttribute('text-anchor', 'middle')
+      priceText.setAttribute('fill', color)
+      priceText.setAttribute('font-size', '9')
+      priceText.setAttribute('font-weight', '700')
+      priceText.setAttribute('font-family', 'monospace')
+      priceText.textContent = parseFloat(t.price).toLocaleString('en-US', { maximumFractionDigits: 0 })
+      svg.appendChild(priceText)
+
+      // Label on left side of zone
+      const labelText = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      labelText.setAttribute('x', chartWidth * 0.42)
+      labelText.setAttribute('y', y - zoneHeight / 2 - 2)
+      labelText.setAttribute('fill', color)
+      labelText.setAttribute('font-size', '7')
+      labelText.setAttribute('font-weight', '600')
+      labelText.setAttribute('opacity', '0.8')
+      labelText.textContent = t.label
+      svg.appendChild(labelText)
+    })
+
+    // Invalidation level (red dashed line)
+    if (invalidation) {
+      const invY = candleSeriesRef.value.priceToCoordinate(invalidation.price)
+      if (invY !== null && invY > 0 && invY < 2000) {
+        const invLine = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+        invLine.setAttribute('x1', '0')
+        invLine.setAttribute('y1', invY)
+        invLine.setAttribute('x2', chartWidth)
+        invLine.setAttribute('y2', invY)
+        invLine.setAttribute('stroke', '#ef5350')
+        invLine.setAttribute('stroke-width', '1')
+        invLine.setAttribute('stroke-dasharray', '8 4')
+        invLine.setAttribute('opacity', '0.5')
+        svg.appendChild(invLine)
+
+        // Invalidation badge
+        const invBadge = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+        invBadge.setAttribute('x', chartWidth - 69)
+        invBadge.setAttribute('y', invY - 7)
+        invBadge.setAttribute('width', 65)
+        invBadge.setAttribute('height', 14)
+        invBadge.setAttribute('rx', '3')
+        invBadge.setAttribute('fill', 'rgba(239,83,80,0.2)')
+        invBadge.setAttribute('stroke', 'rgba(239,83,80,0.4)')
+        invBadge.setAttribute('stroke-width', '0.5')
+        svg.appendChild(invBadge)
+
+        const invText = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+        invText.setAttribute('x', chartWidth - 36)
+        invText.setAttribute('y', invY + 3.5)
+        invText.setAttribute('text-anchor', 'middle')
+        invText.setAttribute('fill', '#ef5350')
+        invText.setAttribute('font-size', '9')
+        invText.setAttribute('font-weight', '700')
+        invText.setAttribute('font-family', 'monospace')
+        invText.textContent = parseFloat(invalidation.price).toLocaleString('en-US', { maximumFractionDigits: 0 })
+        svg.appendChild(invText)
+
+        // Warning label
+        const warnLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+        warnLabel.setAttribute('x', '8')
+        warnLabel.setAttribute('y', invY - 4)
+        warnLabel.setAttribute('fill', '#ef5350')
+        warnLabel.setAttribute('font-size', '7')
+        warnLabel.setAttribute('font-weight', '700')
+        warnLabel.setAttribute('opacity', '0.7')
+        warnLabel.textContent = `⚠ INVALID: ${invalidation.rule}`
+        svg.appendChild(warnLabel)
+      }
+    }
+
+    // Retracement lines (subtle between last 2 waves)
+    retracements.forEach(r => {
+      const y = candleSeriesRef.value.priceToCoordinate(r.price)
+      if (y === null || y < 0 || y > 2000) return
+
+      const retLine = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+      retLine.setAttribute('x1', chartWidth * 0.3)
+      retLine.setAttribute('y1', y)
+      retLine.setAttribute('x2', chartWidth * 0.6)
+      retLine.setAttribute('y2', y)
+      retLine.setAttribute('stroke', 'rgba(139,92,246,0.15)')
+      retLine.setAttribute('stroke-width', '1')
+      retLine.setAttribute('stroke-dasharray', '3 3')
+      svg.appendChild(retLine)
+
+      const retLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      retLabel.setAttribute('x', chartWidth * 0.3 + 2)
+      retLabel.setAttribute('y', y - 2)
+      retLabel.setAttribute('fill', '#555')
+      retLabel.setAttribute('font-size', '7')
+      retLabel.setAttribute('font-family', 'monospace')
+      retLabel.textContent = `${(r.level * 100).toFixed(1)}%`
+      svg.appendChild(retLabel)
+    })
   }
 
   // ── Signal markers on candle series ──
