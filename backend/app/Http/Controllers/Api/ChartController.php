@@ -280,6 +280,107 @@ class ChartController extends Controller
         return $labels;
     }
 
+    /**
+     * Multi-timeframe wave analysis — runs Elliott Wave + Market Structure
+     * on ALL 6 timeframes and returns wave position, trend, health per TF.
+     */
+    public function mtfWaves(Request $request): JsonResponse
+    {
+        $request->validate([
+            'symbol_id' => 'required|exists:symbols,id',
+        ]);
+
+        $symbol = Symbol::findOrFail($request->symbol_id);
+        $degrees = [
+            '1D' => 'Primary', '4H' => 'Intermediate', '1H' => 'Minor',
+            '15M' => 'Minute', '5M' => 'Minuette', '1M' => 'Sub-Minuette',
+        ];
+
+        $tfData = [];
+        $trends = [];
+
+        foreach (self::TIMEFRAMES as $tf) {
+            $candles = Candle::where('symbol_id', $symbol->id)
+                ->where('timeframe', $tf)
+                ->orderBy('timestamp')
+                ->get()
+                ->toArray();
+
+            if (count($candles) < 50) {
+                $tfData[$tf] = [
+                    'timeframe' => $tf,
+                    'degree' => $degrees[$tf] ?? $tf,
+                    'wave' => null,
+                    'phase' => null,
+                    'trend' => 'neutral',
+                    'health' => 0,
+                    'waveLabels' => [],
+                    'fibTargets' => [],
+                ];
+                $trends[] = 'neutral';
+                continue;
+            }
+
+            $ewResult = (new ElliottWaveEngine())->run($candles, $symbol->ticker, $tf);
+            $msResult = (new MarketStructureEngine(5))->run($candles, $symbol->ticker, $tf);
+
+            $currentWave = $ewResult->metadata['current_wave'] ?? null;
+            $phase = $ewResult->metadata['phase'] ?? null;
+            $trend = $msResult->metadata['trend'] ?? 'neutral';
+            $health = $ewResult->metadata['health_score'] ?? 0;
+
+            $trends[] = $trend;
+
+            $tfData[$tf] = [
+                'timeframe' => $tf,
+                'degree' => $degrees[$tf] ?? $tf,
+                'wave' => $currentWave,
+                'phase' => $phase,
+                'trend' => $trend,
+                'health' => $health,
+                'waveLabels' => $ewResult->overlays['waveLabels'] ?? [],
+                'fibTargets' => $ewResult->overlays['fibTargets'] ?? [],
+            ];
+        }
+
+        // Calculate alignment
+        $bullCount = count(array_filter($trends, fn ($t) => $t === 'bullish'));
+        $bearCount = count(array_filter($trends, fn ($t) => $t === 'bearish'));
+        $totalTfs = count(self::TIMEFRAMES);
+        $alignment = max($bullCount, $bearCount);
+        $htfBias = $bullCount > $bearCount ? 'BULL' : ($bearCount > $bullCount ? 'BEAR' : 'NEUTRAL');
+
+        // Trend progress: estimate how far through the current wave cycle
+        // Based on the highest TF's wave position
+        $htfWave = $tfData['1D']['wave'] ?? $tfData['4H']['wave'] ?? null;
+        $trendProgress = $this->estimateTrendProgress($htfWave);
+
+        return response()->json([
+            'symbol' => $symbol->ticker,
+            'timeframes' => $tfData,
+            'htfBias' => $htfBias,
+            'alignment' => $alignment . '/' . $totalTfs,
+            'alignmentPct' => $totalTfs > 0 ? round($alignment / $totalTfs * 100) : 0,
+            'trendProgress' => $trendProgress,
+        ]);
+    }
+
+    private function estimateTrendProgress(?string $wave): array
+    {
+        $progressMap = [
+            '1' => ['pct' => 15, 'label' => 'JUST STARTED', 'stage' => 'start'],
+            '2' => ['pct' => 25, 'label' => 'EARLY', 'stage' => 'start'],
+            '3' => ['pct' => 50, 'label' => 'MIDDLE', 'stage' => 'middle'],
+            '4' => ['pct' => 65, 'label' => 'PAST MIDDLE', 'stage' => 'middle'],
+            '5' => ['pct' => 85, 'label' => 'NEAR END', 'stage' => 'end'],
+            'A' => ['pct' => 40, 'label' => 'CORRECTION START', 'stage' => 'start'],
+            'B' => ['pct' => 60, 'label' => 'CORRECTION MIDDLE', 'stage' => 'middle'],
+            'C' => ['pct' => 85, 'label' => 'CORRECTION END', 'stage' => 'end'],
+        ];
+
+        return $progressMap[$wave] ?? ['pct' => 50, 'label' => 'UNKNOWN', 'stage' => 'middle'];
+    }
+
     public function symbols(): JsonResponse
     {
         return response()->json(Symbol::active()->get());

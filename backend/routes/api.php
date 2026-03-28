@@ -26,6 +26,7 @@ Route::prefix('v1')->group(function () {
     Route::get('chart/candles', [ChartController::class, 'candles']);
     Route::get('chart/candles/latest', [ChartController::class, 'fetchLatest']);
     Route::get('chart/overlays', [ChartController::class, 'overlays']);
+    Route::get('chart/mtf-waves', [ChartController::class, 'mtfWaves']);
     Route::get('chart/symbols', [ChartController::class, 'symbols']);
     Route::post('chart/symbols', [ChartController::class, 'storeSymbol']);
     Route::patch('chart/symbols/{symbol}', [ChartController::class, 'updateSymbol']);

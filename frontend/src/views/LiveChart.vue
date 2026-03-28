@@ -9,6 +9,7 @@ import { useDrawingStore } from '../stores/useDrawingStore'
 import DrawingToolbar from '../components/chart/DrawingToolbar.vue'
 import SignalFeed from '../components/panels/SignalFeed.vue'
 import TradePanel from '../components/panels/TradePanel.vue'
+import WaveMatrixPanel from '../components/panels/WaveMatrixPanel.vue'
 import { useTradeStore } from '../stores/useTradeStore'
 
 const chartStore = useChartStore()
@@ -358,85 +359,8 @@ watch(() => drawingStore.currentDrawings, () => renderAll(), { deep: true })
         </div>
 
         <!-- Matrix panel content -->
-        <div v-if="rightPanel === 'matrix'" class="flex-1 overflow-hidden flex flex-col">
-        <div class="matrix-header">
-          <div class="matrix-title"><span>&#9672;</span> Elliott Wave Matrix</div>
-          <div class="matrix-sub">All timeframes · {{ chartStore.activeSymbol?.ticker || 'BTCUSDT' }}</div>
-        </div>
-
-        <div class="matrix-rows">
-          <div v-for="(w, idx) in waveMatrix" :key="w.tf" class="matrix-row-wrap">
-            <div class="matrix-row" :class="{ expanded: expandedWave === idx }"
-              @click="expandedWave = expandedWave === idx ? null : idx">
-              <div class="matrix-row-top">
-                <div class="matrix-bar" :style="{ background: idx < 3 ? 'var(--accent)' : 'var(--dim)', opacity: idx < 3 ? 1 : 0.5 }"></div>
-                <div class="matrix-tf">
-                  <div class="tf-label">{{ w.tf }}</div>
-                  <div class="degree-label">{{ w.degree }}</div>
-                </div>
-                <span :class="['wave-badge', w.phase === 'CORRECTION' ? 'corr' : 'imp']">{{ w.wave }}<span v-if="w.of" class="wave-of"> of {{ w.of }}</span></span>
-                <span :class="['phase-label', w.phase === 'IMPULSE' ? 'imp' : 'corr']">{{ w.phase.slice(0, 3) }}</span>
-                <div class="matrix-spacer"></div>
-                <div :class="['dir-badge', w.dir === 'BULL' ? 'bull' : 'bear']">
-                  <span class="dir-arrow" :style="{ transform: w.dir === 'BULL' ? 'rotate(-45deg)' : 'rotate(45deg)' }">→</span>
-                  {{ w.dir }}
-                </div>
-                <div class="conf-ring">
-                  <svg width="26" height="26" viewBox="0 0 26 26">
-                    <circle cx="13" cy="13" r="11" fill="none" stroke="var(--border)" stroke-width="2" />
-                    <circle cx="13" cy="13" r="11" fill="none"
-                      :stroke="w.conf >= 75 ? 'var(--bull)' : w.conf >= 55 ? 'var(--accent)' : w.conf >= 35 ? 'var(--ob)' : 'var(--bear)'"
-                      stroke-width="2" :stroke-dasharray="`${69.1 * w.conf / 100} ${69.1 * (1 - w.conf / 100)}`"
-                      stroke-linecap="round" transform="rotate(-90 13 13)" />
-                    <text x="13" y="16" text-anchor="middle"
-                      :fill="w.conf >= 75 ? 'var(--bull)' : w.conf >= 55 ? 'var(--accent)' : w.conf >= 35 ? 'var(--ob)' : 'var(--bear)'"
-                      font-size="8" font-weight="700" font-family="var(--mono)">{{ w.conf }}</text>
-                  </svg>
-                </div>
-              </div>
-              <div class="matrix-row-bottom">
-                <div class="progress-bar">
-                  <div class="progress-fill" :style="{ width: w.pct + '%', background: w.dir === 'BULL' ? 'var(--bull)' : 'var(--bear)' }"></div>
-                </div>
-                <span class="pct-label">{{ w.pct }}%</span>
-              </div>
-              <div class="matrix-note">{{ w.note }}</div>
-            </div>
-
-            <!-- Expanded detail -->
-            <div v-if="expandedWave === idx" class="matrix-detail">
-              <div class="detail-grid">
-                <div class="detail-card">
-                  <div class="detail-label">Target</div>
-                  <div class="detail-value" :style="{ color: w.dir === 'BULL' ? 'var(--bull)' : 'var(--bear)' }">{{ w.target }}</div>
-                </div>
-                <div :class="['detail-card', w.dir === 'BULL' ? 'bull' : 'bear']">
-                  <div class="detail-label">Action</div>
-                  <div class="detail-value" :style="{ color: w.dir === 'BULL' ? 'var(--bull)' : 'var(--bear)' }">
-                    Stay {{ w.dir === 'BULL' ? 'LONG' : 'SHORT' }}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Confluence footer (LIVE from ConfluenceEngine) -->
-        <div v-if="confluence" class="matrix-footer">
-          <div class="conf-label">Confluence summary</div>
-          <div class="conf-grid">
-            <div v-for="(val, key) in confluence.breakdown" :key="key"
-              :class="['conf-card', { ok: val.ok }]">
-              <div class="conf-card-label">{{ val.ok ? '✓' : '◌' }} {{ key.charAt(0).toUpperCase() + key.slice(1) }}</div>
-              <div class="conf-card-desc">{{ val.desc }}</div>
-              <div class="conf-card-score">{{ val.score }}/{{ val.max }}</div>
-            </div>
-          </div>
-          <div class="conf-total" :style="{ background: confluence.pct >= 60 ? 'rgba(0,220,130,0.06)' : 'rgba(245,158,11,0.06)', border: `1px solid ${confluence.pct >= 60 ? 'var(--bull-line)' : 'rgba(245,158,11,0.25)'}` }">
-            <span class="conf-total-num" :style="{ color: confluence.pct >= 60 ? 'var(--bull)' : 'var(--ob)' }">{{ confluence.pct }}</span><span class="conf-total-pct">%</span>
-            <div class="conf-total-text">{{ confluence.action }} · {{ confluence.direction }}</div>
-          </div>
-        </div>
+        <div v-if="rightPanel === 'matrix'" class="flex-1 overflow-y-auto">
+          <WaveMatrixPanel />
         </div><!-- close matrix content -->
       </div><!-- close matrix-panel -->
     </div><!-- close main-area -->
