@@ -123,26 +123,19 @@ export const useRealtimeStore = defineStore('realtime', () => {
   }
 
   /**
-   * Fetch only the latest candles (delta) and merge into existing data.
+   * Fetch latest candles from exchange via the fetchLatest endpoint.
+   * This triggers a LIVE fetch from Binance/OANDA/etc, upserts to DB,
+   * aggregates higher TFs, and returns the freshest candles.
    */
   async function pollLatestCandles() {
     if (!chartStore.activeSymbolId || !chartStore.activeTimeframe) return
 
-    const existingCandles = chartStore.candles
-    let fromParam = undefined
-
-    // Only fetch candles after the last one we have
-    if (existingCandles.length > 0) {
-      const lastTs = existingCandles[existingCandles.length - 1].timestamp
-      fromParam = lastTs
-    }
-
     const { data: newCandles } = await import('axios').then(m =>
-      m.default.get('/api/v1/chart/candles', {
+      m.default.get('/api/v1/chart/candles/latest', {
         params: {
           symbol_id: chartStore.activeSymbolId,
           timeframe: chartStore.activeTimeframe,
-          from: fromParam,
+          limit: 10,
         },
       })
     )
@@ -190,12 +183,15 @@ export const useRealtimeStore = defineStore('realtime', () => {
     const newTimestamp = candle.timestamp
 
     if (lastCandle.timestamp === newTimestamp) {
+      // Update existing forming candle OHLCV
       Object.assign(candles[candles.length - 1], candle)
-    } else {
+    } else if (newTimestamp > lastCandle.timestamp) {
+      // New candle period started — append
       candles.push(candle)
     }
 
     chartStore.candles = [...candles]
+    console.log(`[WS] CandleUpdated via Reverb: ${event.timeframe} @ ${newTimestamp}`)
   }
 
   /**

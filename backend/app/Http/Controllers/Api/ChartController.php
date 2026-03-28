@@ -13,16 +13,141 @@ use App\Engines\PriceActionEngine;
 use App\Engines\SMCEngine;
 use App\Engines\VWAPEngine;
 use App\Http\Controllers\Controller;
+use App\Events\CandleUpdated;
 use App\Models\Candle;
 use App\Models\FVG;
 use App\Models\OrderBlock;
 use App\Models\Signal;
 use App\Models\Symbol;
+use App\Services\CandleAggregationService;
+use App\Services\DataSources\BinanceDataSource;
+use App\Services\DataSources\DataSourceInterface;
+use App\Services\DataSources\OANDADataSource;
+use App\Services\DataSources\YahooDataSource;
+use App\Services\DataSources\ZerodhaDataSource;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Redis;
 
 class ChartController extends Controller
 {
+    private const TIMEFRAMES = ['1M', '5M', '15M', '1H', '4H', '1D'];
+
+    /**
+     * Fetch latest candles from exchange → upsert DB → publish to Redis →
+     * broadcast via Reverb → return fresh candles.
+     *
+     * Full pipeline: Exchange API → DB → Redis Pub/Sub → Reverb WebSocket → Echo → Vue chart
+     * Called every 30s by frontend polling.
+     */
+    public function fetchLatest(Request $request): JsonResponse
+    {
+        $request->validate([
+            'symbol_id' => 'required|exists:symbols,id',
+            'timeframe' => 'required|string|in:1M,5M,15M,1H,4H,1D',
+        ]);
+
+        $symbol = Symbol::findOrFail($request->symbol_id);
+        $timeframe = $request->timeframe;
+        $aggregatedCandles = [];
+
+        try {
+            $dataSource = $this->resolveDataSource($symbol->exchange);
+
+            // Step 1: Fetch last 5 minutes of 1M candles from exchange
+            $from = Carbon::now()->utc()->subMinutes(5);
+            $to = Carbon::now()->utc();
+            $fetched = $dataSource->fetchCandles($symbol->ticker, '1M', $from, $to);
+
+            if ($fetched->isNotEmpty()) {
+                // Step 2: Upsert to DB (rule #2: INSERT ... ON CONFLICT DO UPDATE)
+                $mapped = $fetched->map(fn (array $c) => [...$c, 'symbol_id' => $symbol->id])->toArray();
+                Candle::upsertCandles($mapped);
+
+                // Step 3: Publish 1M candle to Redis channel (rule #4)
+                $latestCandle = $fetched->last();
+                $this->publishToRedis($symbol->ticker, '1M', $latestCandle);
+
+                // Step 4: Broadcast 1M CandleUpdated via Reverb WebSocket
+                $this->broadcastCandle($symbol->ticker, '1M', $latestCandle);
+
+                // Step 5: Aggregate higher TFs from 1M base (rule #10)
+                $aggregator = new CandleAggregationService();
+                $aggregatedCandles = $aggregator->aggregateFromOneMinute($symbol->id);
+
+                // Step 6: Publish + broadcast each aggregated higher TF
+                foreach ($aggregatedCandles as $tf => $candleData) {
+                    if ($candleData) {
+                        $this->publishToRedis($symbol->ticker, $tf, $candleData);
+                        $this->broadcastCandle($symbol->ticker, $tf, $candleData);
+                    }
+                }
+
+                Log::debug("fetchLatest: {$symbol->ticker} — {$fetched->count()} 1M candles, " .
+                    count($aggregatedCandles) . " TFs aggregated, Redis+Reverb published");
+            }
+        } catch (\Throwable $e) {
+            Log::warning("fetchLatest failed for {$symbol->ticker}: {$e->getMessage()}");
+        }
+
+        // Return last N candles for the requested timeframe
+        $limit = $request->query('limit', 5);
+        $candles = Candle::forSymbol($symbol->id, $timeframe)
+            ->orderByDesc('timestamp')
+            ->limit((int) $limit)
+            ->get()
+            ->sortBy('timestamp')
+            ->values();
+
+        return response()->json($candles);
+    }
+
+    /**
+     * Publish candle to Redis Pub/Sub channel for SSE streaming (rule #4).
+     */
+    private function publishToRedis(string $symbol, string $timeframe, array $candle): void
+    {
+        try {
+            $channel = "candles:{$symbol}:{$timeframe}";
+            Redis::publish($channel, json_encode([
+                'symbol' => $symbol,
+                'timeframe' => $timeframe,
+                'candle' => $candle,
+                'published_at' => now()->utc()->toIso8601String(),
+            ]));
+        } catch (\Throwable $e) {
+            Log::debug("Redis publish skipped: {$e->getMessage()}");
+        }
+    }
+
+    /**
+     * Broadcast CandleUpdated event via Laravel Reverb WebSocket.
+     */
+    private function broadcastCandle(string $symbol, string $timeframe, array $candle): void
+    {
+        try {
+            broadcast(new CandleUpdated($symbol, $timeframe, $candle));
+        } catch (\Throwable $e) {
+            Log::debug("Reverb broadcast skipped: {$e->getMessage()}");
+        }
+    }
+
+    /**
+     * Resolve data source adapter based on exchange name.
+     */
+    private function resolveDataSource(string $exchange): DataSourceInterface
+    {
+        return match ($exchange) {
+            'binance' => new BinanceDataSource(),
+            'zerodha' => new ZerodhaDataSource(),
+            'oanda' => new OANDADataSource(),
+            'yahoo' => new YahooDataSource(),
+            default => throw new \RuntimeException("Unsupported exchange: {$exchange}"),
+        };
+    }
+
     public function candles(Request $request): JsonResponse
     {
         $request->validate([
