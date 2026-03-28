@@ -56,8 +56,9 @@ class ChartController extends Controller
         try {
             $dataSource = $this->resolveDataSource($symbol->exchange);
 
-            // Step 1: Fetch last 5 minutes of 1M candles from exchange
-            $from = Carbon::now()->utc()->subMinutes(5);
+            // Step 1: Fetch last 15 minutes of 1M candles from exchange
+            // (15 min window ensures we catch up after any gaps/pauses)
+            $from = Carbon::now()->utc()->subMinutes(15);
             $to = Carbon::now()->utc();
             $fetched = $dataSource->fetchCandles($symbol->ticker, '1M', $from, $to);
 
