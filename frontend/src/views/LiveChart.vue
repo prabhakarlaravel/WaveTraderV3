@@ -4,6 +4,9 @@ import { createChart, CandlestickSeries, HistogramSeries } from 'lightweight-cha
 import { useChartStore } from '../stores/useChartStore'
 import { useRealtimeStore } from '../stores/useRealtimeStore'
 import { useChartOverlays } from '../composables/useChartOverlays'
+import { useDrawingTools } from '../composables/useDrawingTools'
+import { useDrawingStore } from '../stores/useDrawingStore'
+import DrawingToolbar from '../components/chart/DrawingToolbar.vue'
 import SignalFeed from '../components/panels/SignalFeed.vue'
 import TradePanel from '../components/panels/TradePanel.vue'
 import { useTradeStore } from '../stores/useTradeStore'
@@ -11,6 +14,7 @@ import { useTradeStore } from '../stores/useTradeStore'
 const chartStore = useChartStore()
 const realtime = useRealtimeStore()
 const tradeStore = useTradeStore()
+const drawingStore = useDrawingStore()
 const rightPanel = ref('trade') // 'trade' | 'signals'
 
 const chartContainer = ref(null)
@@ -133,16 +137,48 @@ function initChart() {
   resizeObserver.observe(chartContainer.value)
 }
 
-const { renderAll, cleanup, attachChartListeners, setContainer } = useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayToggles)
+// Drawing tools
+const {
+  activeTool: drawActiveTool,
+  isDrawingMode,
+  drawingState,
+  selectTool: drawSelectTool,
+  cancelDrawing,
+  onMouseDown: drawMouseDown,
+  onMouseMove: drawMouseMove,
+  renderDrawings,
+} = useDrawingTools(chartRef, candleSeriesRef, chartContainer, drawingStore)
+
+const { renderAll, cleanup, attachChartListeners, setContainer } = useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayToggles, renderDrawings)
+
+let lastSetDataLength = 0
 
 function updateChartData() {
   if (!candleSeriesRef.value) return
   const candles = chartStore.formattedCandles
   const volume = chartStore.formattedVolume
-  if (candles.length > 0) {
+  if (candles.length === 0) return
+
+  // Full setData on initial load, TF switch, or symbol switch (big length change)
+  // Use update() for live 30s ticks — smooth, no flicker
+  if (Math.abs(candles.length - lastSetDataLength) > 2 || lastSetDataLength === 0) {
     candleSeriesRef.value.setData(candles)
     volumeSeries.setData(volume)
-    chartRef.value.timeScale().fitContent()
+    chartRef.value.timeScale().scrollToRealTime()
+    lastSetDataLength = candles.length
+  } else {
+    // Live update: update the current forming candle + append new ones
+    const last = candles[candles.length - 1]
+    const lastVol = volume[volume.length - 1]
+    try {
+      candleSeriesRef.value.update(last)
+      volumeSeries.update(lastVol)
+    } catch {
+      // Fallback to full setData if update() fails (e.g. time order issue)
+      candleSeriesRef.value.setData(candles)
+      volumeSeries.setData(volume)
+    }
+    lastSetDataLength = candles.length
   }
   updatePrice()
   updateWaveMatrix()
@@ -153,6 +189,7 @@ onMounted(async () => {
   setContainer(chartContainer.value)
   attachChartListeners()
   await chartStore.fetchSymbols()
+  drawingStore.setContext(chartStore.activeSymbolId, chartStore.activeTimeframe)
   await chartStore.fetchCandles()
   tradeStore.fetchTrades()
   updateChartData()
@@ -162,6 +199,10 @@ onMounted(async () => {
 onUnmounted(() => { cleanup(); resizeObserver?.disconnect(); chartRef.value?.remove() })
 watch(() => chartStore.formattedCandles, () => { updateChartData(); renderAll() })
 watch(overlayToggles, () => renderAll(), { deep: true })
+watch([() => chartStore.activeSymbolId, () => chartStore.activeTimeframe], ([sid, tf]) => {
+  drawingStore.setContext(sid, tf)
+})
+watch(() => drawingStore.currentDrawings, () => renderAll(), { deep: true })
 </script>
 
 <template>
@@ -192,6 +233,16 @@ watch(overlayToggles, () => renderAll(), { deep: true })
         <span class="overlay-dot" :style="{ background: overlayToggles[o.key] ? o.color : 'var(--dim)' }"></span>
         {{ o.label }}
       </button>
+
+      <div class="toolbar-sep"></div>
+
+      <!-- Drawing tools -->
+      <DrawingToolbar
+        :active-tool="drawActiveTool"
+        :drawing-count="drawingStore.currentDrawings.length"
+        @select="drawSelectTool"
+        @clear-all="drawingStore.clearAll"
+      />
 
       <div class="toolbar-spacer"></div>
 
@@ -234,7 +285,14 @@ watch(overlayToggles, () => renderAll(), { deep: true })
     <div class="main-area">
       <!-- Chart column -->
       <div class="chart-col">
-        <div ref="chartContainer" class="chart-container"></div>
+        <div ref="chartContainer" class="chart-container">
+          <!-- Drawing interaction layer — captures mouse events when drawing mode active -->
+          <div v-if="isDrawingMode"
+            class="drawing-layer"
+            @mousedown="drawMouseDown"
+            @mousemove="drawMouseMove"
+          ></div>
+        </div>
 
         <!-- Bias strip below chart -->
         <div class="bias-strip">
@@ -425,7 +483,8 @@ watch(overlayToggles, () => renderAll(), { deep: true })
 /* ── Main area ── */
 .main-area { flex: 1; display: flex; overflow: hidden; }
 .chart-col { flex: 1; display: flex; flex-direction: column; gap: 6px; padding: 8px; min-width: 0; }
-.chart-container { flex: 1; background: var(--bg); border-radius: 10px; border: 1px solid var(--border); overflow: hidden; }
+.chart-container { flex: 1; background: var(--bg); border-radius: 10px; border: 1px solid var(--border); overflow: hidden; position: relative; }
+.drawing-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 20; background: transparent; }
 
 /* ── Bias strip ── */
 .bias-strip { display: flex; gap: 6px; }

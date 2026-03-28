@@ -7,6 +7,7 @@ namespace App\Jobs;
 use App\Events\CandleUpdated;
 use App\Models\Candle;
 use App\Models\Symbol;
+use App\Services\CandleAggregationService;
 use App\Services\DataSources\BinanceDataSource;
 use App\Services\DataSources\DataSourceInterface;
 use App\Services\DataSources\OANDADataSource;
@@ -39,18 +40,21 @@ class FetchCandlesJob implements ShouldQueue
         $dataSource = $this->resolveDataSource($symbol->exchange);
 
         // Determine fetch window: from last stored candle to now
+        // Use the last candle's timestamp (NOT +1s) so the current forming
+        // candle gets re-fetched and its OHLCV updated via upsert every 30s
         $lastCandle = Candle::where('symbol_id', $symbol->id)
             ->where('timeframe', $this->timeframe)
             ->orderByDesc('timestamp')
             ->first();
 
-        $from = $lastCandle ? $lastCandle->timestamp->addSecond() : Carbon::now()->subMonths(3);
+        $from = $lastCandle ? $lastCandle->timestamp : Carbon::now()->subMonths(3);
         $to = Carbon::now();
 
         $candles = $dataSource->fetchCandles($symbol->ticker, $this->timeframe, $from, $to);
 
         if ($candles->isEmpty()) {
             Log::info("FetchCandlesJob: no new candles for {$symbol->ticker} [{$this->timeframe}]");
+
             return;
         }
 
@@ -62,9 +66,30 @@ class FetchCandlesJob implements ShouldQueue
 
         Log::info("FetchCandlesJob: upserted {$candles->count()} candles for {$symbol->ticker} [{$this->timeframe}]");
 
-        // Broadcast event for Vue frontend
-        $lastCandleData = $candles->last();
-        broadcast(new CandleUpdated($symbol->ticker, $this->timeframe, $lastCandleData));
+        // Derive higher timeframes from 1M base (rule #10)
+        $aggregatedCandles = [];
+        if ($this->timeframe === '1M') {
+            $aggregator = new CandleAggregationService();
+            $aggregatedCandles = $aggregator->aggregateFromOneMinute($symbol->id);
+            $tfCount = count($aggregatedCandles);
+            Log::info("FetchCandlesJob: aggregated 1M into {$tfCount} higher timeframes for {$symbol->ticker}");
+        }
+
+        // Broadcast candle updates for ALL timeframes
+        try {
+            // Broadcast 1M update
+            $lastCandleData = $candles->last();
+            broadcast(new CandleUpdated($symbol->ticker, $this->timeframe, $lastCandleData));
+
+            // Broadcast each aggregated higher timeframe update
+            foreach ($aggregatedCandles as $tf => $candleData) {
+                if ($candleData) {
+                    broadcast(new CandleUpdated($symbol->ticker, $tf, $candleData));
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning("Broadcasting skipped (Reverb not running?): {$e->getMessage()}");
+        }
 
         // Dispatch engine runs after candle fetch (rule #8: engines queue)
         RunEnginesJob::dispatch($this->symbolId, $this->timeframe)->onQueue('engines');

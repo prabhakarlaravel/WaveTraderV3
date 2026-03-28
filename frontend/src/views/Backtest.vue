@@ -4,10 +4,14 @@ import { createChart, CandlestickSeries, HistogramSeries, LineSeries } from 'lig
 import { useChartStore } from '../stores/useChartStore'
 import { useBacktestReplay } from '../composables/useBacktestReplay'
 import { useChartOverlays } from '../composables/useChartOverlays'
+import { useDrawingTools } from '../composables/useDrawingTools'
+import { useDrawingStore } from '../stores/useDrawingStore'
+import DrawingToolbar from '../components/chart/DrawingToolbar.vue'
 import axios from 'axios'
 
 const chartStore = useChartStore()
 const replay = useBacktestReplay()
+const drawingStore = useDrawingStore()
 
 const chartContainer = ref(null)
 const chartRef = ref(null)
@@ -43,8 +47,20 @@ const overlayProxy = {
   get candles() { return replay.visibleCandles.value },
 }
 
+// Drawing tools
+const {
+  activeTool: drawActiveTool,
+  isDrawingMode,
+  drawingState,
+  selectTool: drawSelectTool,
+  cancelDrawing,
+  onMouseDown: drawMouseDown,
+  onMouseMove: drawMouseMove,
+  renderDrawings,
+} = useDrawingTools(chartRef, candleSeriesRef, chartContainer, drawingStore)
+
 const { renderAll, cleanup, attachChartListeners, setContainer } = useChartOverlays(
-  chartRef, candleSeriesRef, overlayProxy, overlayToggles
+  chartRef, candleSeriesRef, overlayProxy, overlayToggles, renderDrawings
 )
 
 // Price display
@@ -126,6 +142,7 @@ function updateChartData() {
 async function startReplay() {
   if (!selectedSymbol.value || !fromDate.value || !toDate.value) return
   await replay.load(selectedSymbol.value, selectedTf.value, fromDate.value, toDate.value)
+  drawingStore.setContext(selectedSymbol.value, selectedTf.value)
 
   await nextTick()
   initChart()
@@ -227,6 +244,14 @@ watch(() => rightPanel.value, (v) => {
           <span class="dot" :style="{ background: o.color }"></span> {{ o.label }}
         </button>
       </template>
+
+      <div class="toolbar-sep"></div>
+      <DrawingToolbar
+        :active-tool="drawActiveTool"
+        :drawing-count="drawingStore.currentDrawings.length"
+        @select="drawSelectTool"
+        @clear-all="drawingStore.clearAll"
+      />
     </div>
 
     <!-- Toolbar Row 2: Date range + Replay controls -->
@@ -287,7 +312,14 @@ watch(() => rightPanel.value, (v) => {
     <div class="main-area" v-if="replay.loaded.value">
       <!-- Chart -->
       <div class="chart-col">
-        <div ref="chartContainer" class="chart-container"></div>
+        <div ref="chartContainer" class="chart-container">
+          <div v-if="isDrawingMode"
+            class="drawing-layer"
+            @mousedown="drawMouseDown"
+            @mousemove="drawMouseMove"
+            style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:20;cursor:crosshair;background:transparent;"
+          ></div>
+        </div>
 
         <!-- Bias strip -->
         <div class="bias-strip">

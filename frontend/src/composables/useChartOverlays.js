@@ -5,14 +5,18 @@ import { LineSeries } from 'lightweight-charts'
  * Full SVG overlay system for rendering waves, OBs, FVGs, BOS/CHOCH, VWAP
  * on top of the lightweight-charts canvas.
  */
-export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayToggles) {
+export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayToggles, drawingRenderer = null) {
   let vwapSeries = null
   let vwapU1Series = null
   let vwapL1Series = null
   const svgOverlay = ref(null)
 
+  // Browser's local timezone offset (must match useChartStore)
+  const LOCAL_TZ_OFFSET = -(new Date().getTimezoneOffset()) * 60
+
   function toUnix(ts) {
-    return Math.floor(new Date(ts).getTime() / 1000)
+    const utcStr = ts.endsWith('Z') ? ts : String(ts).replace(' ', 'T') + 'Z'
+    return Math.floor(new Date(utcStr).getTime() / 1000) + LOCAL_TZ_OFFSET
   }
 
   // ── Coordinate helpers ──
@@ -83,7 +87,10 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     if (toggles.ob) renderLiquidityPools(overlays.liquidityPools || [], svg, w)
     if (toggles.bos) renderBos(overlays.bos || [], svg)
     if (toggles.waves) renderWaveLabels(overlays.waveLabels || [], svg)
-    if (toggles.signals) renderSignalMarkers()
+    if (toggles.signals) { try { renderSignalMarkers() } catch (e) { /* markers may fail if series not ready */ } }
+
+    // Render user drawings (injected from useDrawingTools)
+    try { if (drawingRenderer) drawingRenderer(svg, w, h) } catch (e) { /* drawing render error */ }
   }
 
   // ── VWAP with bands ──

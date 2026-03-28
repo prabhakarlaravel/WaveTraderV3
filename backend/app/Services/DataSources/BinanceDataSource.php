@@ -48,7 +48,7 @@ class BinanceDataSource implements DataSourceInterface
             foreach ($response as $row) {
                 $allCandles->push([
                     'timeframe' => $timeframe,
-                    'timestamp' => Carbon::createFromTimestampMs((int) $row[0])->toDateTimeString(),
+                    'timestamp' => Carbon::createFromTimestampMs((int) $row[0])->utc()->format('Y-m-d H:i:sP'),
                     'open' => (float) $row[1],
                     'high' => (float) $row[2],
                     'low' => (float) $row[3],

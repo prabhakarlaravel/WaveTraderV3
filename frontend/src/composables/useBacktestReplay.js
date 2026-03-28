@@ -41,9 +41,17 @@ export function useBacktestReplay() {
     return parseFloat(currentCandle.value.close)
   })
 
+  // Browser's local timezone offset (must match useChartStore)
+  const LOCAL_TZ_OFFSET = -(new Date().getTimezoneOffset()) * 60
+
+  function toLocalEpoch(ts) {
+    const utcStr = ts.endsWith('Z') ? ts : String(ts).replace(' ', 'T') + 'Z'
+    return Math.floor(new Date(utcStr).getTime() / 1000) + LOCAL_TZ_OFFSET
+  }
+
   const formattedVisible = computed(() =>
     visibleCandles.value.map(c => ({
-      time: Math.floor(new Date(c.timestamp).getTime() / 1000),
+      time: toLocalEpoch(c.timestamp),
       open: parseFloat(c.open),
       high: parseFloat(c.high),
       low: parseFloat(c.low),
@@ -56,7 +64,7 @@ export function useBacktestReplay() {
       const o = parseFloat(c.open)
       const cl = parseFloat(c.close)
       return {
-        time: Math.floor(new Date(c.timestamp).getTime() / 1000),
+        time: toLocalEpoch(c.timestamp),
         value: parseFloat(c.volume),
         color: cl >= o ? 'rgba(38, 166, 154, 0.3)' : 'rgba(239, 83, 80, 0.3)',
       }

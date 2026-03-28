@@ -102,6 +102,9 @@ export const useRealtimeStore = defineStore('realtime', () => {
   function startPolling() {
     stopPolling()
 
+    // Immediate first poll to ensure fresh data on mount/TF switch
+    pollLatestCandles().then(() => { fetchCount.value++ }).catch(() => {})
+
     pollingInterval.value = setInterval(async () => {
       try {
         await pollLatestCandles()
