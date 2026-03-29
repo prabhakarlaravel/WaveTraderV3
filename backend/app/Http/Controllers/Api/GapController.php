@@ -28,16 +28,22 @@ class GapController extends Controller
     {
         $request->validate([
             'symbol_id' => 'required|exists:symbols,id',
-            'timeframe' => 'required|in:1M,5M,15M,1H,4H,1D',
+            'timeframe' => 'nullable|in:1M,5M,15M,1H,4H,1D',
         ]);
 
         $symbol = Symbol::findOrFail($request->symbol_id);
-        $gaps = $gapService->detect($symbol, $request->timeframe);
 
-        return response()->json([
-            'message' => "Found {$gaps->count()} gaps",
-            'gaps' => $gaps,
-        ]);
+        if ($request->timeframe) {
+            $gaps = $gapService->detect($symbol, $request->timeframe);
+
+            return response()->json([
+                'message' => "Found {$gaps->count()} gaps",
+                'gaps' => $gaps,
+            ]);
+        }
+
+        // Smart scan: all TFs with visual timeline
+        return response()->json($gapService->smartScan($symbol));
     }
 
     public function fill(Request $request, GapDetectionService $gapService): JsonResponse
@@ -53,9 +59,9 @@ class GapController extends Controller
             ->unfilled()
             ->get();
 
-        $gapService->fill($symbol, $request->timeframe, $gaps);
+        $filledCount = $gapService->fill($symbol, $request->timeframe, $gaps);
 
-        return response()->json(['message' => "Filled {$gaps->count()} gaps"]);
+        return response()->json(['message' => "Filled {$gaps->count()} gaps ({$filledCount} candles fetched)"]);
     }
 
     public function health(): JsonResponse
