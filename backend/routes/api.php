@@ -65,6 +65,8 @@ Route::prefix('v1')->group(function () {
 
     // Wave health
     Route::get('wave-health', [WaveController::class, 'healthDashboard']);
+    Route::post('wave-health/validate', [WaveController::class, 'validateAll']);
+    Route::post('wave-health/fix', [WaveController::class, 'autoFix']);
 });
 
 // UDF endpoints (TradingView Charting Library) — no Sanctum middleware

@@ -58,6 +58,23 @@ class WaveController extends Controller
         return response()->json($results);
     }
 
+    public function validateAll(Request $request, WaveHealthService $service): JsonResponse
+    {
+        $request->validate(['symbol_id' => 'required|exists:symbols,id']);
+
+        return response()->json($service->validateAll((int) $request->symbol_id));
+    }
+
+    public function autoFix(Request $request, WaveHealthService $service): JsonResponse
+    {
+        $request->validate([
+            'symbol_id' => 'required|exists:symbols,id',
+            'timeframe' => 'required|in:1M,5M,15M,1H,4H,1D',
+        ]);
+
+        return response()->json($service->autoFix((int) $request->symbol_id, $request->timeframe));
+    }
+
     public function signals(Request $request, string $symbol): JsonResponse
     {
         $signals = Signal::whereHas('symbol', fn ($q) => $q->where('ticker', $symbol))
