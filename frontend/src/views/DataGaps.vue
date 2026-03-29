@@ -1,12 +1,16 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import axios from 'axios'
 
 const symbols = ref([])
 const selectedSymbol = ref(null)
 const scanResult = ref(null)
 const scanning = ref(false)
-const filling = ref('')
+const fillingTf = ref('')
+const fillProgress = reactive({})  // { tf: { status, filled, total, pct, startTime, elapsed } }
+const activityLog = ref([])
+
+const tfOrder = ['1M', '5M', '15M', '1H', '4H', '1D']
 
 onMounted(async () => {
   const { data } = await axios.get('/api/v1/chart/symbols')
@@ -17,37 +21,92 @@ onMounted(async () => {
   }
 })
 
+function addLog(msg, color = '#34d399') {
+  activityLog.value.unshift({ msg, color, time: new Date().toLocaleTimeString() })
+  if (activityLog.value.length > 30) activityLog.value.pop()
+}
+
 async function smartScan() {
   if (!selectedSymbol.value) return
   scanning.value = true
+  addLog('Scanning 6 timeframes...', '#7c3aed')
   try {
     const { data } = await axios.post('/api/v1/gaps/scan', { symbol_id: selectedSymbol.value })
     scanResult.value = data
+    addLog(`Smart Scan completed — found ${data.totalGaps} gaps`, '#34d399')
+  } catch (e) {
+    addLog(`Scan failed: ${e.message}`, '#ef5350')
   } finally {
     scanning.value = false
   }
 }
 
 async function fillGap(tf) {
-  if (!selectedSymbol.value) return
-  filling.value = tf
+  if (!selectedSymbol.value || fillingTf.value) return
+  fillingTf.value = tf
+
+  const tfData = scanResult.value?.timeframes?.[tf]
+  const totalMissing = tfData?.gaps?.reduce((s, g) => s + g.missingCandles, 0) || 0
+
+  fillProgress[tf] = { status: 'filling', filled: 0, total: totalMissing, pct: 0, startTime: Date.now(), elapsed: '0s' }
+  addLog(`${tf} gap fill started — ${totalMissing} candles to fetch`, '#2563eb')
+
+  // Simulate progress ticks while API runs
+  const progressTimer = setInterval(() => {
+    if (fillProgress[tf]?.status === 'filling') {
+      const elapsed = ((Date.now() - fillProgress[tf].startTime) / 1000).toFixed(1)
+      fillProgress[tf].elapsed = `${elapsed}s`
+      // Gradual progress while waiting
+      if (fillProgress[tf].pct < 90) {
+        fillProgress[tf].pct = Math.min(90, fillProgress[tf].pct + 2)
+        fillProgress[tf].filled = Math.floor(totalMissing * fillProgress[tf].pct / 100)
+      }
+    }
+  }, 200)
+
   try {
-    await axios.post('/api/v1/gaps/fill', { symbol_id: selectedSymbol.value, timeframe: tf })
+    const { data } = await axios.post('/api/v1/gaps/fill', { symbol_id: selectedSymbol.value, timeframe: tf })
+
+    clearInterval(progressTimer)
+    const elapsed = ((Date.now() - fillProgress[tf].startTime) / 1000).toFixed(1)
+    fillProgress[tf] = { status: 'done', filled: totalMissing, total: totalMissing, pct: 100, elapsed: `${elapsed}s` }
+    addLog(`${tf} gap filled — ${totalMissing} candles in ${elapsed}s`, '#34d399')
+
+    // Refresh scan data
     await smartScan()
+  } catch (e) {
+    clearInterval(progressTimer)
+    fillProgress[tf] = { ...fillProgress[tf], status: 'error' }
+    addLog(`${tf} fill failed: ${e.message}`, '#ef5350')
   } finally {
-    filling.value = ''
+    fillingTf.value = ''
   }
 }
 
 async function fillAll() {
   if (!scanResult.value) return
-  const tfsWithGaps = Object.entries(scanResult.value.timeframes)
-    .filter(([, v]) => v.gapCount > 0)
-    .map(([k]) => k)
+  const tfsWithGaps = tfOrder.filter(tf => (scanResult.value.timeframes[tf]?.gapCount ?? 0) > 0)
+  addLog(`Auto-Fill All started — ${tfsWithGaps.length} timeframes`, '#7c3aed')
   for (const tf of tfsWithGaps) {
     await fillGap(tf)
   }
+  addLog('Auto-Fill All completed!', '#34d399')
 }
+
+const totalMissing = computed(() => {
+  if (!scanResult.value) return 0
+  return Object.values(scanResult.value.timeframes).reduce((s, tf) =>
+    s + (tf.gaps?.reduce((gs, g) => gs + g.missingCandles, 0) || 0), 0)
+})
+
+const totalFilled = computed(() => {
+  return Object.values(fillProgress).reduce((s, p) => s + (p.status === 'done' ? p.total : 0), 0)
+})
+
+const overallPct = computed(() => {
+  const t = totalMissing.value
+  return t > 0 ? Math.round(totalFilled.value / t * 100) : 0
+})
 
 function formatTime(iso) {
   if (!iso) return ''
@@ -55,17 +114,20 @@ function formatTime(iso) {
 }
 
 function formatDuration(mins) {
+  if (!mins) return '—'
   if (mins < 60) return `${mins}m`
   const h = Math.floor(mins / 60)
   const m = mins % 60
   return m > 0 ? `${h}h ${m}m` : `${h}h`
 }
 
-const tfOrder = ['1M', '5M', '15M', '1H', '4H', '1D']
+function gapStatus(tf) {
+  return fillProgress[tf]?.status || 'pending'
+}
 </script>
 
 <template>
-  <div class="p-4 max-w-6xl mx-auto">
+  <div class="p-4 max-w-7xl mx-auto">
     <!-- Header -->
     <div class="flex items-center justify-between mb-5">
       <div>
@@ -83,7 +145,7 @@ const tfOrder = ['1M', '5M', '15M', '1H', '4H', '1D']
           style="background: #2563eb; color: #fff">
           {{ scanning ? '⟳ Scanning...' : '🔍 Smart Scan' }}
         </button>
-        <button @click="fillAll" :disabled="!scanResult?.totalGaps"
+        <button @click="fillAll" :disabled="!scanResult?.totalGaps || fillingTf"
           class="rounded-md px-3 py-1.5 text-[11px] font-bold"
           style="background: #059669; color: #fff">
           🔧 Auto-Fill All
@@ -91,152 +153,198 @@ const tfOrder = ['1M', '5M', '15M', '1H', '4H', '1D']
       </div>
     </div>
 
-    <!-- Visual Gap Timeline -->
-    <div v-if="scanResult" class="rounded-xl p-4 mb-5" style="background: var(--card); border: 1px solid var(--border)">
-      <h3 class="text-sm font-bold mb-3" style="color: var(--text)">
-        📊 Gap Timeline — {{ scanResult.symbol }}
-        <span class="text-xs font-normal ml-2" style="color: var(--dim)">{{ scanResult.marketType }} market</span>
-      </h3>
+    <div v-if="scanResult" class="grid gap-4" style="grid-template-columns: 1fr 320px">
+      <!-- LEFT: Timeline + Gap Cards -->
+      <div>
+        <!-- Visual Timeline -->
+        <div class="rounded-xl p-4 mb-4" style="background: var(--card); border: 1px solid var(--border)">
+          <div class="flex justify-between items-center mb-3">
+            <h3 class="text-sm font-bold" style="color: var(--text)">📊 Gap Timeline</h3>
+            <span class="text-[10px]" style="color: var(--dim)">{{ scanResult.marketType }} market</span>
+          </div>
 
-      <div v-for="tf in tfOrder" :key="tf" class="flex items-center gap-2.5 mb-2.5">
-        <div class="w-8 text-right font-extrabold text-xs" style="font-family: var(--mono); color: var(--text)">{{ tf }}</div>
+          <div v-for="tf in tfOrder" :key="tf" class="flex items-center gap-2 mb-1.5">
+            <div class="w-7 text-right font-extrabold text-[11px]" style="font-family: var(--mono); color: var(--text)">{{ tf }}</div>
+            <div class="flex-1 flex h-4 rounded overflow-hidden" style="background: var(--surface); border: 1px solid var(--border)">
+              <template v-if="scanResult.timeframes[tf]?.timeline?.length">
+                <div v-for="(seg, i) in scanResult.timeframes[tf].timeline" :key="i"
+                  :style="{
+                    width: seg.widthPct + '%',
+                    background: seg.type === 'ok' ? 'rgba(52,211,153,0.12)' : 'repeating-linear-gradient(45deg,rgba(239,83,80,0.2),rgba(239,83,80,0.2) 3px,rgba(239,83,80,0.05) 3px,rgba(239,83,80,0.05) 6px)',
+                    borderLeft: seg.type === 'gap' ? '2px solid var(--bear)' : 'none',
+                    borderRight: seg.type === 'gap' ? '2px solid var(--bear)' : 'none',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }"
+                  :title="seg.type === 'gap' ? `${formatTime(seg.start)} → ${formatTime(seg.end)}` : ''">
+                  <span v-if="seg.type === 'gap' && seg.widthPct > 6" class="text-[6px] font-extrabold" style="color: var(--bear)">GAP</span>
+                </div>
+              </template>
+            </div>
+            <span class="w-8 text-right text-[10px] font-extrabold"
+              :style="{ color: (scanResult.timeframes[tf]?.healthPct ?? 0) >= 95 ? 'var(--bull)' : (scanResult.timeframes[tf]?.healthPct ?? 0) >= 80 ? '#fbbf24' : 'var(--bear)' }">
+              {{ scanResult.timeframes[tf]?.healthPct ?? 0 }}%
+            </span>
+            <span class="w-12 text-right text-[9px] font-bold"
+              :style="{ color: (scanResult.timeframes[tf]?.gapCount ?? 0) > 0 ? 'var(--bear)' : 'var(--bull)' }">
+              {{ (scanResult.timeframes[tf]?.gapCount ?? 0) > 0 ? scanResult.timeframes[tf].gapCount + ' gap' + (scanResult.timeframes[tf].gapCount > 1 ? 's' : '') : '✓ OK' }}
+            </span>
+          </div>
+        </div>
 
-        <div class="flex-1 relative">
-          <div class="flex h-5 rounded overflow-hidden" style="background: var(--surface); border: 1px solid var(--border)">
-            <template v-if="scanResult.timeframes[tf]?.timeline?.length">
-              <div v-for="(seg, i) in scanResult.timeframes[tf].timeline" :key="i"
-                :style="{
-                  width: seg.widthPct + '%',
-                  background: seg.type === 'ok'
-                    ? 'rgba(52,211,153,0.15)'
-                    : 'repeating-linear-gradient(45deg, rgba(239,83,80,0.25), rgba(239,83,80,0.25) 3px, rgba(239,83,80,0.06) 3px, rgba(239,83,80,0.06) 6px)',
-                  borderLeft: seg.type === 'gap' ? '2px solid var(--bear)' : 'none',
-                  borderRight: seg.type === 'gap' ? '2px solid var(--bear)' : 'none',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }"
-                :title="seg.type === 'gap' ? `Gap: ${formatTime(seg.start)} → ${formatTime(seg.end)}` : 'Data OK'">
-                <span v-if="seg.type === 'gap' && seg.widthPct > 5"
-                  class="text-[7px] font-extrabold whitespace-nowrap" style="color: var(--bear)">⚠ GAP</span>
+        <!-- Gap Cards -->
+        <div class="space-y-3">
+          <template v-for="tf in tfOrder" :key="'card-'+tf">
+            <template v-for="(gap, gi) in (scanResult.timeframes[tf]?.gaps || [])" :key="tf+'-'+gi">
+              <div class="rounded-xl p-3.5 relative overflow-hidden" style="background: var(--card)"
+                :style="{ border: gapStatus(tf) === 'done' ? '1px solid rgba(52,211,153,0.3)' : '1px solid var(--border)' }">
+
+                <!-- Top progress line -->
+                <div v-if="gapStatus(tf) !== 'pending'" class="absolute top-0 left-0 h-[3px] rounded-r transition-all duration-300"
+                  :style="{ width: (fillProgress[tf]?.pct || 0) + '%', background: gapStatus(tf) === 'done' ? '#34d399' : 'linear-gradient(90deg,#059669,#34d399)' }"></div>
+
+                <!-- Header -->
+                <div class="flex justify-between items-start mb-2">
+                  <div class="flex items-center gap-1.5">
+                    <span class="font-extrabold text-xs" style="font-family: var(--mono); color: var(--text)">{{ tf }}</span>
+                    <span class="rounded px-1.5 py-0.5 text-[8px] font-bold"
+                      :style="{ background: gap.gapType === 'trailing' ? 'rgba(239,83,80,0.15)' : 'rgba(251,191,36,0.15)', color: gap.gapType === 'trailing' ? 'var(--bear)' : '#fbbf24' }">
+                      {{ gap.gapType === 'trailing' ? 'Trailing' : 'Internal' }}
+                    </span>
+                    <!-- Status badge -->
+                    <span v-if="gapStatus(tf) === 'filling'" class="rounded px-1.5 py-0.5 text-[8px] font-bold animate-pulse"
+                      style="background: rgba(37,99,235,0.15); color: #2563eb">⟳ FILLING...</span>
+                    <span v-else-if="gapStatus(tf) === 'done'" class="rounded px-1.5 py-0.5 text-[8px] font-bold"
+                      style="background: rgba(52,211,153,0.15); color: #34d399">✓ FILLED</span>
+                    <span v-else-if="gapStatus(tf) === 'error'" class="rounded px-1.5 py-0.5 text-[8px] font-bold"
+                      style="background: rgba(239,83,80,0.15); color: var(--bear)">✕ FAILED</span>
+                  </div>
+                  <div v-if="gapStatus(tf) === 'pending'">
+                    <button @click="fillGap(tf)" :disabled="!!fillingTf"
+                      class="rounded px-2.5 py-1 text-[9px] font-bold" style="background: #059669; color: #fff">🔧 Fill</button>
+                  </div>
+                  <span v-else class="text-[10px] font-bold" :style="{ color: gapStatus(tf) === 'done' ? '#34d399' : '#2563eb' }">
+                    {{ fillProgress[tf]?.pct || 0 }}%
+                  </span>
+                </div>
+
+                <!-- Time range -->
+                <div class="text-[11px] mb-2" style="font-family: var(--mono); color: var(--text)">
+                  {{ formatTime(gap.gapStart) }} <span style="color: var(--dim)">→</span> {{ formatTime(gap.gapEnd) }}
+                </div>
+
+                <!-- Stats row -->
+                <div class="flex gap-4 mb-2">
+                  <div>
+                    <span class="text-[8px]" style="color: var(--dim)">Duration</span>
+                    <div class="text-xs font-bold" style="color: #fbbf24">{{ formatDuration(gap.durationMinutes) }}</div>
+                  </div>
+                  <div>
+                    <span class="text-[8px]" style="color: var(--dim)">Missing</span>
+                    <div class="text-xs font-bold" style="color: var(--bear)">{{ gap.missingCandles }}</div>
+                  </div>
+                  <div v-if="gapStatus(tf) === 'filling' || gapStatus(tf) === 'done'">
+                    <span class="text-[8px]" style="color: var(--dim)">Filled</span>
+                    <div class="text-xs font-bold" style="color: var(--bull)">{{ fillProgress[tf]?.filled || 0 }}</div>
+                  </div>
+                  <div v-if="gapStatus(tf) === 'filling' || gapStatus(tf) === 'done'">
+                    <span class="text-[8px]" style="color: var(--dim)">Time</span>
+                    <div class="text-xs font-bold" style="color: var(--muted)">{{ fillProgress[tf]?.elapsed || '—' }}</div>
+                  </div>
+                </div>
+
+                <!-- Progress bar (filling/done) -->
+                <div v-if="gapStatus(tf) !== 'pending'" class="rounded-full overflow-hidden" style="height: 5px; background: var(--surface)">
+                  <div class="h-full rounded-full transition-all duration-300"
+                    :style="{ width: (fillProgress[tf]?.pct || 0) + '%', background: gapStatus(tf) === 'done' ? '#34d399' : 'linear-gradient(90deg,#059669,#34d399)' }"></div>
+                </div>
+                <div v-if="gapStatus(tf) === 'filling'" class="flex justify-between mt-1">
+                  <span class="text-[8px]" style="color: var(--dim)">Fetching from exchange...</span>
+                  <span class="text-[8px]" style="color: var(--bull)">{{ fillProgress[tf]?.filled || 0 }}/{{ fillProgress[tf]?.total || 0 }}</span>
+                </div>
+                <div v-if="gapStatus(tf) === 'done'" class="text-right mt-1">
+                  <span class="text-[8px]" style="color: var(--bull)">Completed in {{ fillProgress[tf]?.elapsed }}</span>
+                </div>
               </div>
             </template>
-            <div v-else class="w-full h-full flex items-center justify-center">
-              <span class="text-[8px]" style="color: var(--dim)">No data</span>
+          </template>
+
+          <!-- No gaps -->
+          <div v-if="!scanResult.totalGaps" class="rounded-xl p-8 text-center" style="background: var(--card); border: 1px solid var(--border)">
+            <div class="text-3xl mb-2">✅</div>
+            <div class="text-sm font-bold" style="color: var(--bull)">All data complete!</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: Status Panel -->
+      <div>
+        <!-- Scan Summary -->
+        <div class="rounded-xl p-4 mb-3" style="background: var(--card); border: 1px solid var(--border)">
+          <h3 class="text-xs font-bold mb-3" style="color: var(--text)">📋 Scan Summary</h3>
+          <div class="grid grid-cols-2 gap-2 mb-3">
+            <div class="rounded-lg p-2 text-center" style="background: var(--surface)">
+              <div class="text-[8px] uppercase" style="color: var(--dim)">Gaps</div>
+              <div class="text-xl font-black" style="color: var(--bear)">{{ scanResult.totalGaps }}</div>
+            </div>
+            <div class="rounded-lg p-2 text-center" style="background: var(--surface)">
+              <div class="text-[8px] uppercase" style="color: var(--dim)">Missing</div>
+              <div class="text-xl font-black" style="color: #fbbf24">{{ totalMissing.toLocaleString() }}</div>
+            </div>
+            <div class="rounded-lg p-2 text-center" style="background: var(--surface)">
+              <div class="text-[8px] uppercase" style="color: var(--dim)">Filled</div>
+              <div class="text-xl font-black" style="color: var(--bull)">{{ totalFilled.toLocaleString() }}</div>
+            </div>
+            <div class="rounded-lg p-2 text-center" style="background: var(--surface)">
+              <div class="text-[8px] uppercase" style="color: var(--dim)">Remaining</div>
+              <div class="text-xl font-black" style="color: #fbbf24">{{ (totalMissing - totalFilled).toLocaleString() }}</div>
+            </div>
+          </div>
+          <div>
+            <div class="flex justify-between mb-1">
+              <span class="text-[9px]" style="color: var(--dim)">Overall Progress</span>
+              <span class="text-[9px] font-bold" style="color: var(--bull)">{{ overallPct }}%</span>
+            </div>
+            <div class="rounded-full overflow-hidden" style="height: 6px; background: var(--surface)">
+              <div class="h-full rounded-full transition-all duration-500"
+                :style="{ width: overallPct + '%', background: 'linear-gradient(90deg,#059669,#34d399)' }"></div>
             </div>
           </div>
         </div>
 
-        <div class="w-12 text-right">
-          <span class="text-[11px] font-extrabold"
-            :style="{ color: (scanResult.timeframes[tf]?.healthPct ?? 0) >= 95 ? 'var(--bull)' : (scanResult.timeframes[tf]?.healthPct ?? 0) >= 80 ? '#fbbf24' : 'var(--bear)' }">
-            {{ scanResult.timeframes[tf]?.healthPct ?? 0 }}%
-          </span>
-        </div>
-
-        <div class="w-16 text-right">
-          <span v-if="(scanResult.timeframes[tf]?.gapCount ?? 0) > 0"
-            class="rounded px-1.5 py-0.5 text-[9px] font-bold"
-            style="background: rgba(239,83,80,0.15); color: var(--bear)">
-            {{ scanResult.timeframes[tf].gapCount }} gap{{ scanResult.timeframes[tf].gapCount > 1 ? 's' : '' }}
-          </span>
-          <span v-else class="text-[9px] font-bold" style="color: var(--bull)">✓ Clean</span>
-        </div>
-
-        <div class="w-12 text-right">
-          <button v-if="(scanResult.timeframes[tf]?.gapCount ?? 0) > 0"
-            @click="fillGap(tf)" :disabled="filling === tf"
-            class="rounded px-2 py-0.5 text-[9px] font-bold"
-            style="background: #059669; color: #fff">
-            {{ filling === tf ? '⟳' : 'Fill' }}
-          </button>
-        </div>
-      </div>
-
-      <div class="flex gap-4 mt-3 pt-2.5" style="border-top: 1px solid var(--border)">
-        <div class="flex items-center gap-1.5">
-          <div class="w-3 h-2.5 rounded-sm" style="background: rgba(52,211,153,0.15); border: 1px solid rgba(52,211,153,0.3)"></div>
-          <span class="text-[9px]" style="color: var(--dim)">Data present</span>
-        </div>
-        <div class="flex items-center gap-1.5">
-          <div class="w-3 h-2.5 rounded-sm"
-            style="background: repeating-linear-gradient(45deg, rgba(239,83,80,0.3), rgba(239,83,80,0.3) 2px, rgba(239,83,80,0.08) 2px, rgba(239,83,80,0.08) 4px); border: 1px solid rgba(239,83,80,0.4)"></div>
-          <span class="text-[9px]" style="color: var(--dim)">Missing data (gap)</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Gap Details -->
-    <div v-if="scanResult?.groupedGaps?.length" class="rounded-xl p-4 mb-5" style="background: var(--card); border: 1px solid var(--border)">
-      <h3 class="text-sm font-bold mb-3" style="color: var(--bear)">
-        ⚠ Gap Details ({{ scanResult.groupedGaps.length }} gap{{ scanResult.groupedGaps.length > 1 ? 's' : '' }})
-      </h3>
-      <div class="space-y-2">
-        <div v-for="(gap, i) in scanResult.groupedGaps" :key="i"
-          class="rounded-lg p-3 flex items-center gap-3"
-          style="background: rgba(239,83,80,0.04); border: 1px solid rgba(239,83,80,0.12)">
-          <div class="w-1 self-stretch rounded" :style="{ background: gap.gapType === 'trailing' ? 'var(--bear)' : '#fbbf24' }"></div>
-          <div class="flex-1">
-            <div class="flex items-center gap-2 mb-1">
-              <span class="font-extrabold text-xs" style="font-family: var(--mono); color: var(--text)">
-                {{ gap.timeframes.join(' · ') }}
-              </span>
-              <span class="rounded px-1.5 py-0.5 text-[9px] font-bold"
-                :style="{
-                  background: gap.gapType === 'trailing' ? 'rgba(239,83,80,0.15)' : 'rgba(251,191,36,0.15)',
-                  color: gap.gapType === 'trailing' ? 'var(--bear)' : '#fbbf24'
-                }">
-                {{ gap.gapType === 'trailing' ? 'Trailing Gap' : 'Internal Gap' }}
-              </span>
+        <!-- Activity Log -->
+        <div class="rounded-xl p-4 mb-3" style="background: var(--card); border: 1px solid var(--border)">
+          <h3 class="text-xs font-bold mb-3" style="color: var(--text)">📝 Activity Log</h3>
+          <div class="space-y-1.5 max-h-80 overflow-y-auto">
+            <div v-for="(log, i) in activityLog" :key="i" class="flex gap-2 items-start">
+              <div class="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0" :style="{ background: log.color }"></div>
+              <div>
+                <div class="text-[10px] font-semibold" :style="{ color: log.color }">{{ log.msg }}</div>
+                <div class="text-[8px]" style="color: var(--dim)">{{ log.time }}</div>
+              </div>
             </div>
-            <div class="text-[11px]" style="color: var(--text); font-family: var(--mono)">
-              {{ formatTime(gap.gapStart) }} <span style="color: var(--dim)">→</span> {{ formatTime(gap.gapEnd) }}
+            <div v-if="!activityLog.length" class="text-[10px] text-center py-4" style="color: var(--dim)">No activity yet</div>
+          </div>
+        </div>
+
+        <!-- Market Hours -->
+        <div class="rounded-xl p-3" style="background: var(--card); border: 1px solid var(--border)">
+          <h3 class="text-[10px] font-bold mb-2" style="color: #7c3aed">📅 Market Hours</h3>
+          <div class="space-y-1">
+            <div class="flex justify-between text-[9px]">
+              <span class="font-bold" style="color: #fbbf24">Binance</span><span style="color: var(--muted)">24/7</span>
             </div>
-            <div class="text-[10px] mt-1" style="color: var(--muted)">
-              Duration: {{ formatDuration(gap.durationMinutes) }} ·
-              Missing:
-              <span v-for="(count, tf) in gap.missingByTf" :key="tf" class="ml-1">
-                <span style="color: var(--bear); font-weight: 700">{{ count }}</span>
-                <span style="color: var(--dim)">({{ tf }})</span>
-              </span>
+            <div class="flex justify-between text-[9px]">
+              <span class="font-bold" style="color: var(--bull)">NSE</span><span style="color: var(--muted)">9:15-15:30 IST</span>
+            </div>
+            <div class="flex justify-between text-[9px]">
+              <span class="font-bold" style="color: #2563eb">Forex</span><span style="color: var(--muted)">Sun-Fri</span>
             </div>
           </div>
-          <button @click="fillGap(gap.timeframes[0])" :disabled="filling !== ''"
-            class="rounded px-3 py-1.5 text-[10px] font-bold shrink-0"
-            style="background: #059669; color: #fff">
-            🔧 Fill
-          </button>
         </div>
       </div>
     </div>
 
-    <div v-else-if="scanResult && !scanResult.groupedGaps?.length"
-      class="rounded-xl p-8 text-center mb-5" style="background: var(--card); border: 1px solid var(--border)">
-      <div class="text-3xl mb-2">✅</div>
-      <div class="text-sm font-bold" style="color: var(--bull)">No gaps detected — all data is complete!</div>
-    </div>
-
-    <!-- Market Hours -->
-    <div v-if="scanResult" class="rounded-xl p-4" style="background: var(--card); border: 1px solid var(--border)">
-      <h3 class="text-xs font-bold mb-2" style="color: #7c3aed">📅 Market Hours (used for gap filtering)</h3>
-      <div class="grid grid-cols-4 gap-2">
-        <div class="rounded-lg p-2" style="background: var(--surface); border: 1px solid var(--border)">
-          <div class="text-[10px] font-bold" style="color: #fbbf24">Binance</div>
-          <div class="text-[9px]" style="color: var(--muted)">24/7 — every gap counts</div>
-        </div>
-        <div class="rounded-lg p-2" style="background: var(--surface); border: 1px solid var(--border)">
-          <div class="text-[10px] font-bold" style="color: var(--bull)">NSE</div>
-          <div class="text-[9px]" style="color: var(--muted)">Mon-Fri 9:15-15:30 IST</div>
-        </div>
-        <div class="rounded-lg p-2" style="background: var(--surface); border: 1px solid var(--border)">
-          <div class="text-[10px] font-bold" style="color: #2563eb">Forex</div>
-          <div class="text-[9px]" style="color: var(--muted)">Sun 10PM - Fri 10PM UTC</div>
-        </div>
-        <div class="rounded-lg p-2" style="background: var(--surface); border: 1px solid var(--border)">
-          <div class="text-[10px] font-bold" style="color: var(--bear)">Yahoo</div>
-          <div class="text-[9px]" style="color: var(--muted)">Varies by instrument</div>
-        </div>
-      </div>
-    </div>
-
+    <!-- Loading -->
     <div v-if="!scanResult && scanning" class="text-center py-20">
       <div class="text-sm" style="color: var(--dim)">⟳ Scanning for data gaps across all timeframes...</div>
     </div>
