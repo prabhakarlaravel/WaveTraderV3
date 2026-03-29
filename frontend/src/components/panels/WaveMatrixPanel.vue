@@ -59,6 +59,85 @@ const action = computed(() => {
   return { direction: dir, pct, action: act, isBuy: dir === 'BULL', isSell: dir === 'BEAR' }
 })
 
+// Call/Put recommendation — derived from HTF bias (trend) + confluence signal
+// Updates live via Reverb: overlays watcher → fetchMtfWaves() → mtfData + confluence refresh
+const callPutRec = computed(() => {
+  const htfBias = mtfData.value?.htfBias   // 'BULL' | 'BEAR' | 'NEUTRAL'
+  const signal  = confluence.value?.direction // 'BULL' | 'BEAR'
+  const pct     = confluence.value?.pct ?? 0
+  const activeTf = getTfRow(chartStore.activeTimeframe)
+
+  // Use active TF trend as secondary source if HTF bias not set
+  const trend = htfBias || (activeTf?.trend === 'bullish' ? 'BULL' : activeTf?.trend === 'bearish' ? 'BEAR' : 'NEUTRAL')
+
+  if (!signal || trend === 'NEUTRAL') {
+    return {
+      rec: 'WAIT', emoji: '⏸', conf: pct,
+      color: '#818cf8', borderColor: 'rgba(99,102,241,0.3)', bgClass: 'cp-wait',
+      trendLabel: '↔ SIDEWAYS', trendColor: '#818cf8',
+      signalLabel: signal === 'BULL' ? '● BULLISH' : signal === 'BEAR' ? '● BEARISH' : '◈ MIXED',
+      signalColor: '#818cf8',
+      trendDetail: 'No clear direction',
+      signalDetail: 'Wait for breakout',
+      why: 'No directional edge — avoid forced trades.',
+    }
+  }
+
+  // UP trend + Bullish → strong CALL
+  if (trend === 'BULL' && signal === 'BULL') {
+    return {
+      rec: 'BUY CALL', emoji: '📈', conf: pct,
+      color: '#10b981', borderColor: 'rgba(16,185,129,0.3)', bgClass: 'cp-call',
+      trendLabel: '▲ UP TREND', trendColor: '#10b981',
+      signalLabel: '● BULLISH', signalColor: '#34d399',
+      trendDetail: 'HH + HL structure',
+      signalDetail: `${activeTf?.wave ? 'Wave ' + activeTf.wave : ''} impulse · BOS confirmed`.trim(),
+      why: 'Trend & signal both bullish — stay on CALL side.',
+    }
+  }
+
+  // UP trend + Bearish → pullback, hedge with PUT
+  if (trend === 'BULL' && signal === 'BEAR') {
+    return {
+      rec: 'BUY PUT', emoji: '⚡', conf: Math.round(pct * 0.75),
+      color: '#f59e0b', borderColor: 'rgba(245,158,11,0.3)', bgClass: 'cp-caution',
+      trendLabel: '▲ UP TREND', trendColor: '#10b981',
+      signalLabel: '● BEARISH', signalColor: '#f87171',
+      trendDetail: 'Broader trend bullish',
+      signalDetail: `${activeTf?.wave ? 'Wave ' + activeTf.wave : ''} pullback in progress`.trim(),
+      why: 'Uptrend pullback detected — hedge longs, short-term PUT.',
+    }
+  }
+
+  // DOWN trend + Bullish → bounce, sell the rally with PUT
+  if (trend === 'BEAR' && signal === 'BULL') {
+    return {
+      rec: 'BUY PUT', emoji: '📉', conf: Math.round(pct * 0.8),
+      color: '#ef4444', borderColor: 'rgba(239,68,68,0.3)', bgClass: 'cp-put',
+      trendLabel: '▼ DOWN TREND', trendColor: '#ef4444',
+      signalLabel: '● BULLISH', signalColor: '#34d399',
+      trendDetail: 'LL + LH structure',
+      signalDetail: 'Bounce in downtrend',
+      why: 'Downtrend bounce — sell the rally, stay on PUT side.',
+    }
+  }
+
+  // DOWN trend + Bearish → strong PUT
+  if (trend === 'BEAR' && signal === 'BEAR') {
+    return {
+      rec: 'BUY PUT', emoji: '📉', conf: pct,
+      color: '#ef4444', borderColor: 'rgba(239,68,68,0.3)', bgClass: 'cp-put',
+      trendLabel: '▼ DOWN TREND', trendColor: '#ef4444',
+      signalLabel: '● BEARISH', signalColor: '#f87171',
+      trendDetail: 'LL + LH structure',
+      signalDetail: `${activeTf?.wave ? 'Wave ' + activeTf.wave : ''} declining · CHOCH detected`.trim(),
+      why: 'Trend & signal both bearish — stay on PUT side.',
+    }
+  }
+
+  return null
+})
+
 function toggleTf(tf) {
   expandedTf.value = expandedTf.value === tf ? null : tf
 }
@@ -187,14 +266,32 @@ function formatPrice(p) {
     <div v-if="loading && !mtfData" class="loading">Loading wave analysis...</div>
 
     <template v-if="mtfData">
-      <!-- Action badge -->
-      <div v-if="action" class="action-row">
-        <span class="action-badge" :class="action.isSell ? 'badge-sell' : action.isBuy ? 'badge-buy' : 'badge-wait'">
-          {{ action.isSell ? '↘ SELL' : action.isBuy ? '↗ BUY' : '→ WAIT' }}
-        </span>
-        <div class="action-info">
-          <div class="action-reason">{{ action.action }}</div>
-          <div class="action-conf"><b>{{ action.pct }}%</b> confluence · {{ mtfData.alignment }} TFs aligned</div>
+      <!-- Call / Put Recommendation block -->
+      <div v-if="callPutRec" class="cp-block" :class="callPutRec.bgClass" :style="{ borderColor: callPutRec.borderColor }">
+        <!-- Top row: emoji + recommendation + confidence -->
+        <div class="cp-top">
+          <span class="cp-emoji">{{ callPutRec.emoji }}</span>
+          <div class="cp-main">
+            <div class="cp-label">Recommendation</div>
+            <div class="cp-rec" :style="{ color: callPutRec.color }">{{ callPutRec.rec }}</div>
+          </div>
+          <div class="cp-conf-wrap">
+            <div class="cp-conf-label">Confidence</div>
+            <div class="cp-conf" :style="{ color: callPutRec.color }">{{ callPutRec.conf }}%</div>
+          </div>
+        </div>
+        <!-- Bottom row: trend cell + signal cell -->
+        <div class="cp-cells">
+          <div class="cp-cell">
+            <div class="cp-cell-label">Trend</div>
+            <div class="cp-cell-val" :style="{ color: callPutRec.trendColor }">{{ callPutRec.trendLabel }}</div>
+            <div class="cp-cell-detail">{{ callPutRec.trendDetail }}</div>
+          </div>
+          <div class="cp-cell cp-cell-right">
+            <div class="cp-cell-label">Signal</div>
+            <div class="cp-cell-val" :style="{ color: callPutRec.signalColor }">{{ callPutRec.signalLabel }}</div>
+            <div class="cp-cell-detail">{{ callPutRec.signalDetail }}</div>
+          </div>
         </div>
       </div>
 
@@ -330,16 +427,28 @@ function formatPrice(p) {
 @keyframes live-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 .loading { text-align: center; padding: 20px; font-size: 11px; color: var(--dim); }
 
-/* Action */
-.action-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 0 4px; }
-.action-badge { font-size: 13px; font-weight: 900; padding: 5px 14px; border-radius: 6px; letter-spacing: 1px; }
-.badge-sell { background: rgba(239,83,80,0.12); color: #ef5350; border: 1px solid rgba(239,83,80,0.25); }
-.badge-buy { background: rgba(0,220,130,0.12); color: #34d399; border: 1px solid rgba(0,220,130,0.25); }
-.badge-wait { background: rgba(100,100,100,0.1); color: #888; border: 1px solid rgba(100,100,100,0.2); }
-.action-info { flex: 1; }
-.action-reason { font-size: 10px; color: var(--muted); }
-.action-conf { font-size: 9px; color: var(--dim); margin-top: 2px; }
-.action-conf b { color: #a78bfa; }
+/* Call/Put recommendation block */
+.cp-block { border-radius: 8px; margin-bottom: 10px; overflow: hidden; border: 1px solid; }
+.cp-call   { background: linear-gradient(160deg, #071a0f 0%, #0a1d12 100%); }
+.cp-put    { background: linear-gradient(160deg, #1a0707 0%, #1c0a0a 100%); }
+.cp-caution{ background: linear-gradient(160deg, #191000 0%, #1a1100 100%); }
+.cp-wait   { background: linear-gradient(160deg, #0f0d1a 0%, #100f1c 100%); }
+
+.cp-top { display: flex; align-items: center; gap: 8px; padding: 9px 11px; }
+.cp-emoji { font-size: 24px; line-height: 1; flex-shrink: 0; }
+.cp-main { flex: 1; }
+.cp-label { font-size: 8px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #4b5563; margin-bottom: 1px; }
+.cp-rec   { font-size: 20px; font-weight: 900; line-height: 1; letter-spacing: 0.5px; }
+.cp-conf-wrap { text-align: right; flex-shrink: 0; }
+.cp-conf-label { font-size: 8px; color: #4b5563; margin-bottom: 1px; }
+.cp-conf  { font-size: 17px; font-weight: 800; }
+
+.cp-cells { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid rgba(255,255,255,0.04); }
+.cp-cell  { padding: 5px 10px; }
+.cp-cell-right { border-left: 1px solid rgba(255,255,255,0.04); }
+.cp-cell-label  { font-size: 8px; color: #374151; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; }
+.cp-cell-val    { font-size: 11px; font-weight: 700; line-height: 1; }
+.cp-cell-detail { font-size: 8px; color: #374151; margin-top: 2px; }
 
 /* Trend gauge */
 .trend-gauge { margin: 0 4px 10px; padding: 8px 10px; background: var(--card); border-radius: 6px; border: 1px solid var(--border); }
