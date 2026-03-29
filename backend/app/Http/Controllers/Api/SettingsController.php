@@ -69,6 +69,108 @@ class SettingsController extends Controller
         }
     }
 
+    // ── Zerodha token flow ───────────────────────────────────────────────────
+
+    public function zerodhaLoginUrl(): JsonResponse
+    {
+        $apiKey = Setting::get('zerodha_api_key');
+
+        if (! $apiKey) {
+            return response()->json(['success' => false, 'message' => 'Zerodha API Key not yet configured. Save it first.']);
+        }
+
+        $loginUrl = "https://kite.zerodha.com/connect/login?api_key={$apiKey}&v=3";
+
+        return response()->json(['success' => true, 'url' => $loginUrl]);
+    }
+
+    public function zerodhaExchangeToken(Request $request): JsonResponse
+    {
+        $request->validate(['request_token' => 'required|string']);
+
+        $apiKey    = Setting::get('zerodha_api_key');
+        $apiSecret = Setting::get('zerodha_api_secret');
+
+        if (! $apiKey || ! $apiSecret) {
+            return response()->json(['success' => false, 'message' => 'API Key and Secret must be saved first.']);
+        }
+
+        // KiteConnect checksum = SHA-256(api_key + request_token + api_secret)
+        $checksum = hash('sha256', $apiKey.$request->request_token.$apiSecret);
+
+        $response = Http::asForm()
+            ->withHeaders(['X-Kite-Version' => '3'])
+            ->post('https://api.kite.trade/session/token', [
+                'api_key'       => $apiKey,
+                'request_token' => $request->request_token,
+                'checksum'      => $checksum,
+            ]);
+
+        if ($response->successful()) {
+            $accessToken = $response->json('data.access_token');
+            $userName    = $response->json('data.user_name', '');
+
+            if ($accessToken) {
+                Setting::set('zerodha_access_token', $accessToken, 'exchange', true);
+
+                return response()->json([
+                    'success'   => true,
+                    'message'   => "Token generated for {$userName}",
+                    'user_name' => $userName,
+                ]);
+            }
+        }
+
+        $errMsg = $response->json('message') ?? $response->body();
+
+        return response()->json(['success' => false, 'message' => "Token exchange failed: {$errMsg}"]);
+    }
+
+    public function zerodhaBalance(): JsonResponse
+    {
+        $apiKey      = Setting::get('zerodha_api_key');
+        $accessToken = Setting::get('zerodha_access_token');
+
+        if (! $apiKey || ! $accessToken) {
+            return response()->json(['success' => false, 'has_token' => false, 'message' => 'No active session. Generate token first.']);
+        }
+
+        $response = Http::timeout(10)
+            ->withHeaders([
+                'X-Kite-Version' => '3',
+                'Authorization'  => "token {$apiKey}:{$accessToken}",
+            ])
+            ->get('https://api.kite.trade/user/margins');
+
+        if ($response->successful()) {
+            $data      = $response->json('data', []);
+            $equity    = $data['equity'] ?? [];
+            $commodity = $data['commodity'] ?? [];
+
+            return response()->json([
+                'success'   => true,
+                'has_token' => true,
+                'equity'    => [
+                    'available' => number_format((float) ($equity['available']['live_balance'] ?? $equity['net'] ?? 0), 2),
+                    'used'      => number_format((float) ($equity['utilised']['debits'] ?? 0), 2),
+                ],
+                'commodity' => [
+                    'available' => number_format((float) ($commodity['available']['live_balance'] ?? $commodity['net'] ?? 0), 2),
+                    'used'      => number_format((float) ($commodity['utilised']['debits'] ?? 0), 2),
+                ],
+            ]);
+        }
+
+        // Token might be expired
+        if ($response->status() === 403) {
+            return response()->json(['success' => false, 'has_token' => true, 'expired' => true, 'message' => 'Session expired. Please regenerate token.']);
+        }
+
+        return response()->json(['success' => false, 'has_token' => true, 'message' => 'Balance fetch failed: '.$response->status()]);
+    }
+
+    // ── Private test helpers ─────────────────────────────────────────────────
+
     private function testBinance(): JsonResponse
     {
         $apiKey = Setting::get('binance_api_key');

@@ -1,172 +1,327 @@
 <script setup>
-import { ref, onMounted, reactive } from 'vue'
+import { ref, onMounted, reactive, computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import SymbolManager from '../components/settings/SymbolManager.vue'
+import axios from 'axios'
 
-const store = useSettingsStore()
+const store    = useSettingsStore()
+const route    = useRoute()
 const activeTab = ref('exchange')
 const tabs = [
   { id: 'exchange', label: 'Exchange' },
-  { id: 'engine', label: 'Engines' },
-  { id: 'system', label: 'System' },
-  { id: 'backup', label: 'Backup' },
+  { id: 'engine',   label: 'Engines' },
+  { id: 'system',   label: 'System' },
+  { id: 'backup',   label: 'Backup' },
 ]
 
-// ── Exchange state ──
+// ── Exchange state ──────────────────────────────────────────────────────────
+// Zerodha has no access-token field here — it is generated via KiteConnect OAuth.
 const exchanges = reactive([
   {
     id: 'binance', name: 'Binance', desc: 'Crypto — REST API v3',
     fields: [
-      { key: 'binance_api_key', label: 'API Key', type: 'password', encrypted: true },
+      { key: 'binance_api_key',    label: 'API Key',    type: 'password', encrypted: true },
       { key: 'binance_api_secret', label: 'API Secret', type: 'password', encrypted: true },
     ],
-    testing: false, status: null,
+    saving: false, testing: false, status: null,
   },
   {
     id: 'zerodha', name: 'Zerodha', desc: 'NSE/BSE — KiteConnect v3',
     fields: [
-      { key: 'zerodha_api_key', label: 'API Key', type: 'password', encrypted: true },
+      { key: 'zerodha_api_key',    label: 'API Key',    type: 'password', encrypted: true },
       { key: 'zerodha_api_secret', label: 'API Secret', type: 'password', encrypted: true },
-      { key: 'zerodha_access_token', label: 'Access Token', type: 'password', encrypted: true },
     ],
-    testing: false, status: null,
+    saving: false, testing: false, status: null,
   },
   {
     id: 'oanda', name: 'OANDA', desc: 'Forex — REST v20',
     fields: [
-      { key: 'oanda_account_id', label: 'Account ID', type: 'text', encrypted: false },
-      { key: 'oanda_bearer_token', label: 'Bearer Token', type: 'password', encrypted: true },
-      { key: 'oanda_mode', label: 'Mode', type: 'select', options: ['practice', 'live'], encrypted: false },
+      { key: 'oanda_account_id',    label: 'Account ID',    type: 'text',     encrypted: false },
+      { key: 'oanda_bearer_token',  label: 'Bearer Token',  type: 'password', encrypted: true  },
+      { key: 'oanda_mode',          label: 'Mode',          type: 'select',   options: ['practice', 'live'], encrypted: false },
     ],
-    testing: false, status: null,
+    saving: false, testing: false, status: null,
   },
 ])
 const exchangeValues = reactive({})
 
-// ── Engine state ──
+// ── Zerodha-specific state ──────────────────────────────────────────────────
+const zerodha = reactive({
+  tokenLoading:    false,
+  tokenExchanging: false,
+  balanceLoading:  false,
+  hasToken:        false,
+  expired:         false,
+  userName:        '',
+  equity:          null,
+  commodity:       null,
+  tokenMsg:        '',
+  tokenMsgType:    'success', // 'success' | 'error'
+})
+
+// ── Engine state ────────────────────────────────────────────────────────────
 const engines = reactive([
-  { key: 'elliott_wave', name: 'Elliott Wave', enabled: true, params: [] },
-  { key: 'market_structure', name: 'Market Structure', enabled: true, params: [{ key: 'ms_lookback', label: 'Swing Lookback', type: 'number', default: 5 }] },
-  { key: 'order_block', name: 'Order Block', enabled: true, params: [{ key: 'ob_atr_period', label: 'ATR Period', type: 'number', default: 14 }, { key: 'ob_impulse_mult', label: 'Impulse Multiplier', type: 'number', default: 1.5 }] },
-  { key: 'fvg', name: 'FVG', enabled: true, params: [] },
-  { key: 'smc', name: 'SMC', enabled: true, params: [] },
-  { key: 'vwap', name: 'VWAP', enabled: true, params: [] },
+  { key: 'elliott_wave',    name: 'Elliott Wave',    enabled: true, params: [] },
+  { key: 'market_structure', name: 'Market Structure', enabled: true, params: [
+      { key: 'ms_lookback', label: 'Swing Lookback', type: 'number', default: 5 },
+  ]},
+  { key: 'order_block', name: 'Order Block', enabled: true, params: [
+      { key: 'ob_atr_period',   label: 'ATR Period',          type: 'number', default: 14  },
+      { key: 'ob_impulse_mult', label: 'Impulse Multiplier',  type: 'number', default: 1.5 },
+  ]},
+  { key: 'fvg',          name: 'FVG',          enabled: true, params: [] },
+  { key: 'smc',          name: 'SMC',          enabled: true, params: [] },
+  { key: 'vwap',         name: 'VWAP',         enabled: true, params: [] },
   { key: 'price_action', name: 'Price Action', enabled: true, params: [] },
 ])
-const engineValues = reactive({})
+const engineValues  = reactive({})
 const expandedEngine = ref(null)
+const engineSaving   = ref(false)
 
-// ── System state ──
+// ── System state ────────────────────────────────────────────────────────────
 const systemValues = reactive({
-  fetch_interval: '30',
+  fetch_interval:   '30',
   historical_depth: '3',
   telegram_webhook: '',
-  horizon_workers: '3',
+  horizon_workers:  '3',
 })
+const systemSaving = ref(false)
 
-// ── Backup state ──
+// ── Backup state ────────────────────────────────────────────────────────────
 const backupValues = reactive({
-  local_enabled: false,
+  local_enabled:        false,
   local_retention_days: '7',
-  r2_account_id: '',
-  r2_access_key: '',
-  r2_secret_key: '',
-  r2_bucket: '',
-  scope_candles: true,
-  scope_waves: true,
+  r2_account_id:        '',
+  r2_access_key:        '',
+  r2_secret_key:        '',
+  r2_bucket:            '',
+  scope_candles:  true,
+  scope_waves:    true,
   scope_settings: true,
-  scope_trades: true,
+  scope_trades:   true,
 })
+const backupSaving = ref(false)
 
+// ────────────────────────────────────────────────────────────────────────────
 onMounted(async () => {
   await store.fetchAll()
   loadValues()
+  checkZerodhaRedirect()
+  fetchZerodhaBalance()
 })
 
 function loadValues() {
-  // Load exchange values
   for (const ex of exchanges) {
     for (const f of ex.fields) {
-      exchangeValues[f.key] = store.get(f.key, f.type === 'select' ? f.options?.[0] || '' : '')
+      exchangeValues[f.key] = store.get(f.key, f.type === 'select' ? (f.options?.[0] || '') : '')
     }
   }
-  // Load engine toggles
   for (const eng of engines) {
     eng.enabled = store.get(`engine_${eng.key}_enabled`, 'true') !== 'false'
     for (const p of eng.params) {
       engineValues[p.key] = store.get(p.key, String(p.default))
     }
   }
-  // Load system
-  systemValues.fetch_interval = store.get('fetch_interval', '30')
+  systemValues.fetch_interval   = store.get('fetch_interval',   '30')
   systemValues.historical_depth = store.get('historical_depth', '3')
   systemValues.telegram_webhook = store.get('telegram_webhook', '')
-  systemValues.horizon_workers = store.get('horizon_workers', '3')
-  // Load backup
-  backupValues.local_enabled = store.get('backup_local_enabled', 'false') === 'true'
-  backupValues.local_retention_days = store.get('backup_local_retention_days', '7')
-  backupValues.r2_account_id = store.get('r2_account_id', '')
-  backupValues.r2_access_key = store.get('r2_access_key', '')
-  backupValues.r2_secret_key = store.get('r2_secret_key', '')
-  backupValues.r2_bucket = store.get('r2_bucket', '')
+  systemValues.horizon_workers  = store.get('horizon_workers',  '3')
+  backupValues.local_enabled          = store.get('backup_local_enabled', 'false') === 'true'
+  backupValues.local_retention_days   = store.get('backup_local_retention_days', '7')
+  backupValues.r2_account_id          = store.get('r2_account_id', '')
+  backupValues.r2_access_key          = store.get('r2_access_key', '')
+  backupValues.r2_secret_key          = store.get('r2_secret_key', '')
+  backupValues.r2_bucket              = store.get('r2_bucket', '')
 }
 
+// ── Exchange save / test ─────────────────────────────────────────────────────
 async function saveExchange(ex) {
-  const settings = ex.fields.map(f => ({
-    key: f.key,
-    value: exchangeValues[f.key] || '',
-    group: 'exchange',
-    encrypted: f.encrypted,
-  }))
-  await store.save(settings)
+  ex.saving = true
+  try {
+    const settings = ex.fields.map(f => ({
+      key:       f.key,
+      value:     exchangeValues[f.key] || '',
+      group:     'exchange',
+      encrypted: f.encrypted,
+    }))
+    await axios.put('/api/v1/settings', { settings })
+    store.showToast(`${ex.name} settings saved`, 'success')
+    await store.fetchAll()
+    loadValues()
+  } catch (e) {
+    store.showToast(e.response?.data?.message || 'Failed to save', 'error')
+  } finally {
+    ex.saving = false
+  }
 }
 
 async function testExchange(ex) {
   ex.testing = true
-  ex.status = null
+  ex.status  = null
   const result = await store.testConnection(ex.id)
-  ex.status = result
+  ex.status  = result
   ex.testing = false
 }
 
-async function saveEngines() {
-  const settings = []
-  for (const eng of engines) {
-    settings.push({ key: `engine_${eng.key}_enabled`, value: String(eng.enabled), group: 'engine', encrypted: false })
-    for (const p of eng.params) {
-      settings.push({ key: p.key, value: engineValues[p.key] || String(p.default), group: 'engine', encrypted: false })
+// ── Zerodha token flow ───────────────────────────────────────────────────────
+async function openZerodhaLogin() {
+  zerodha.tokenLoading = true
+  zerodha.tokenMsg     = ''
+  try {
+    const { data } = await axios.get('/api/v1/settings/zerodha/login-url')
+    if (data.success) {
+      window.open(data.url, '_blank', 'width=800,height=600')
+      zerodha.tokenMsg     = 'Zerodha login opened in a new window. After authorising, paste the request_token below.'
+      zerodha.tokenMsgType = 'info'
+      showManualTokenInput.value = true
+    } else {
+      zerodha.tokenMsg     = data.message
+      zerodha.tokenMsgType = 'error'
     }
+  } catch (e) {
+    zerodha.tokenMsg     = e.response?.data?.message || 'Failed to get login URL'
+    zerodha.tokenMsgType = 'error'
+  } finally {
+    zerodha.tokenLoading = false
   }
-  await store.save(settings)
 }
 
+const showManualTokenInput = ref(false)
+const manualRequestToken   = ref('')
+
+async function exchangeToken(requestToken) {
+  if (!requestToken) return
+  zerodha.tokenExchanging = true
+  zerodha.tokenMsg        = ''
+  try {
+    const { data } = await axios.post('/api/v1/settings/zerodha/exchange-token', {
+      request_token: requestToken,
+    })
+    zerodha.tokenMsg     = data.message
+    zerodha.tokenMsgType = data.success ? 'success' : 'error'
+    if (data.success) {
+      zerodha.userName         = data.user_name || ''
+      showManualTokenInput.value = false
+      manualRequestToken.value   = ''
+      await fetchZerodhaBalance()
+    }
+  } catch (e) {
+    zerodha.tokenMsg     = e.response?.data?.message || 'Token exchange failed'
+    zerodha.tokenMsgType = 'error'
+  } finally {
+    zerodha.tokenExchanging = false
+  }
+}
+
+async function fetchZerodhaBalance() {
+  zerodha.balanceLoading = true
+  try {
+    const { data } = await axios.get('/api/v1/settings/zerodha/balance')
+    zerodha.hasToken   = data.has_token   ?? false
+    zerodha.expired    = data.expired     ?? false
+    zerodha.equity     = data.equity      ?? null
+    zerodha.commodity  = data.commodity   ?? null
+    if (data.expired) {
+      zerodha.tokenMsg     = 'Session expired. Please regenerate the token.'
+      zerodha.tokenMsgType = 'error'
+    }
+  } catch {
+    zerodha.hasToken = false
+  } finally {
+    zerodha.balanceLoading = false
+  }
+}
+
+// Auto-exchange token if Zerodha redirected back with request_token in URL
+function checkZerodhaRedirect() {
+  const params = new URLSearchParams(window.location.search)
+  const rt     = params.get('request_token')
+  const status = params.get('status')
+  if (rt && status === 'success') {
+    activeTab.value = 'exchange'
+    // Remove params from URL without reload
+    const clean = window.location.pathname
+    window.history.replaceState({}, '', clean)
+    exchangeToken(rt)
+  }
+}
+
+// Zerodha add-funds URL (Kite web)
+const zerodhaFundsUrl = 'https://zerodha.com/portfolio/add-funds'
+
+// ── Engine save ──────────────────────────────────────────────────────────────
+async function saveEngines() {
+  engineSaving.value = true
+  try {
+    const settings = []
+    for (const eng of engines) {
+      settings.push({ key: `engine_${eng.key}_enabled`, value: String(eng.enabled), group: 'engine', encrypted: false })
+      for (const p of eng.params) {
+        settings.push({ key: p.key, value: engineValues[p.key] || String(p.default), group: 'engine', encrypted: false })
+      }
+    }
+    await axios.put('/api/v1/settings', { settings })
+    store.showToast('Engine settings saved', 'success')
+    await store.fetchAll()
+  } catch (e) {
+    store.showToast(e.response?.data?.message || 'Failed to save', 'error')
+  } finally {
+    engineSaving.value = false
+  }
+}
+
+// ── System save ───────────────────────────────────────────────────────────────
 async function saveSystem() {
-  await store.save([
-    { key: 'fetch_interval', value: systemValues.fetch_interval, group: 'system' },
-    { key: 'historical_depth', value: systemValues.historical_depth, group: 'system' },
-    { key: 'telegram_webhook', value: systemValues.telegram_webhook, group: 'system' },
-    { key: 'horizon_workers', value: systemValues.horizon_workers, group: 'system' },
-  ])
+  systemSaving.value = true
+  try {
+    await axios.put('/api/v1/settings', { settings: [
+      { key: 'fetch_interval',   value: systemValues.fetch_interval,   group: 'system' },
+      { key: 'historical_depth', value: systemValues.historical_depth, group: 'system' },
+      { key: 'telegram_webhook', value: systemValues.telegram_webhook, group: 'system' },
+      { key: 'horizon_workers',  value: systemValues.horizon_workers,  group: 'system' },
+    ]})
+    store.showToast('System settings saved', 'success')
+    await store.fetchAll()
+  } catch (e) {
+    store.showToast(e.response?.data?.message || 'Failed to save', 'error')
+  } finally {
+    systemSaving.value = false
+  }
 }
 
+// ── Backup save ───────────────────────────────────────────────────────────────
 async function saveBackup() {
-  await store.save([
-    { key: 'backup_local_enabled', value: String(backupValues.local_enabled), group: 'backup' },
-    { key: 'backup_local_retention_days', value: backupValues.local_retention_days, group: 'backup' },
-    { key: 'r2_account_id', value: backupValues.r2_account_id, group: 'backup', encrypted: false },
-    { key: 'r2_access_key', value: backupValues.r2_access_key, group: 'backup', encrypted: true },
-    { key: 'r2_secret_key', value: backupValues.r2_secret_key, group: 'backup', encrypted: true },
-    { key: 'r2_bucket', value: backupValues.r2_bucket, group: 'backup', encrypted: false },
-  ])
+  backupSaving.value = true
+  try {
+    await axios.put('/api/v1/settings', { settings: [
+      { key: 'backup_local_enabled',        value: String(backupValues.local_enabled),        group: 'backup' },
+      { key: 'backup_local_retention_days', value: backupValues.local_retention_days,          group: 'backup' },
+      { key: 'r2_account_id',               value: backupValues.r2_account_id,                 group: 'backup', encrypted: false },
+      { key: 'r2_access_key',               value: backupValues.r2_access_key,                 group: 'backup', encrypted: true  },
+      { key: 'r2_secret_key',               value: backupValues.r2_secret_key,                 group: 'backup', encrypted: true  },
+      { key: 'r2_bucket',                   value: backupValues.r2_bucket,                     group: 'backup', encrypted: false },
+    ]})
+    store.showToast('Backup settings saved', 'success')
+    await store.fetchAll()
+  } catch (e) {
+    store.showToast(e.response?.data?.message || 'Failed to save', 'error')
+  } finally {
+    backupSaving.value = false
+  }
 }
 </script>
 
 <template>
   <div class="p-4 max-w-4xl mx-auto">
+
     <!-- Toast -->
     <Teleport to="body">
-      <div v-if="store.toast" class="fixed top-4 right-4 z-50 rounded-lg px-4 py-3 text-sm font-semibold shadow-lg"
-        :style="store.toast.type === 'success' ? 'background: rgba(0,220,130,0.15); border: 1px solid rgba(0,220,130,0.4); color: var(--bull)' : 'background: rgba(255,59,92,0.15); border: 1px solid rgba(255,59,92,0.4); color: var(--bear)'">
+      <div v-if="store.toast"
+        class="fixed top-4 right-4 z-50 rounded-lg px-4 py-3 text-sm font-semibold shadow-lg transition-all"
+        :style="store.toast.type === 'success'
+          ? 'background: rgba(0,220,130,0.15); border: 1px solid rgba(0,220,130,0.4); color: var(--bull)'
+          : 'background: rgba(255,59,92,0.15);  border: 1px solid rgba(255,59,92,0.4);  color: var(--bear)'">
         {{ store.toast.message }}
       </div>
     </Teleport>
@@ -178,28 +333,38 @@ async function saveBackup() {
     <div class="mt-6 flex gap-1" style="border-bottom: 1px solid var(--border)">
       <button v-for="tab in tabs" :key="tab.id" @click="activeTab = tab.id"
         class="px-4 py-2.5 text-sm font-medium transition"
-        :style="activeTab === tab.id ? 'border-bottom: 2px solid var(--accent); color: var(--text)' : 'color: var(--dim)'">
+        :style="activeTab === tab.id
+          ? 'border-bottom: 2px solid var(--accent); color: var(--text)'
+          : 'color: var(--dim)'">
         {{ tab.label }}
       </button>
     </div>
 
     <div class="mt-6">
+
       <!-- ══════ EXCHANGE TAB ══════ -->
       <div v-if="activeTab === 'exchange'" class="space-y-4">
         <div v-for="ex in exchanges" :key="ex.id" class="rounded-xl p-5"
           style="background: var(--card); border: 1px solid var(--border)">
+
+          <!-- Card header -->
           <div class="flex items-center justify-between mb-4">
             <div>
               <h3 class="font-semibold" style="color: var(--text)">{{ ex.name }}</h3>
               <p class="text-xs" style="color: var(--dim)">{{ ex.desc }}</p>
             </div>
             <span v-if="ex.status" class="rounded-full px-2.5 py-1 text-xs font-semibold"
-              :style="ex.status.success ? 'background: rgba(0,220,130,0.1); color: var(--bull)' : 'background: rgba(255,59,92,0.1); color: var(--bear)'">
-              {{ ex.status.success ? 'Connected' : 'Failed' }}
+              :style="ex.status.success
+                ? 'background: rgba(0,220,130,0.1); color: var(--bull)'
+                : 'background: rgba(255,59,92,0.1); color: var(--bear)'">
+              {{ ex.status.success ? '● Connected' : '● Failed' }}
             </span>
-            <span v-else class="rounded-full px-2.5 py-1 text-xs" style="background: var(--surface); color: var(--dim)">Not Connected</span>
+            <span v-else class="rounded-full px-2.5 py-1 text-xs" style="background: var(--surface); color: var(--dim)">
+              ○ Not Connected
+            </span>
           </div>
 
+          <!-- API key / secret fields (all exchanges) -->
           <div class="grid gap-3 md:grid-cols-2">
             <div v-for="f in ex.fields" :key="f.key">
               <label class="block text-[10px] mb-1 uppercase tracking-wider" style="color: var(--dim)">{{ f.label }}</label>
@@ -214,16 +379,117 @@ async function saveBackup() {
             </div>
           </div>
 
+          <!-- ── Zerodha-specific: token + balance section ─────────────────── -->
+          <template v-if="ex.id === 'zerodha'">
+            <div class="mt-5 pt-4" style="border-top: 1px solid var(--border)">
+              <div class="flex items-center gap-2 mb-3">
+                <span class="text-xs font-semibold uppercase tracking-wider" style="color: var(--dim)">Access Token</span>
+                <span v-if="zerodha.hasToken && !zerodha.expired"
+                  class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                  style="background: rgba(0,220,130,0.12); color: var(--bull)">● Active</span>
+                <span v-else-if="zerodha.expired"
+                  class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                  style="background: rgba(255,59,92,0.12); color: var(--bear)">● Expired</span>
+                <span v-else
+                  class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                  style="background: var(--surface); color: var(--dim)">○ Not Generated</span>
+              </div>
+
+              <!-- Token message -->
+              <div v-if="zerodha.tokenMsg" class="mb-3 rounded-md px-3 py-2 text-xs"
+                :style="zerodha.tokenMsgType === 'success'
+                  ? 'background: rgba(0,220,130,0.08); border: 1px solid rgba(0,220,130,0.25); color: var(--bull)'
+                  : zerodha.tokenMsgType === 'error'
+                  ? 'background: rgba(255,59,92,0.08); border: 1px solid rgba(255,59,92,0.25); color: var(--bear)'
+                  : 'background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.25); color: #818cf8'">
+                {{ zerodha.tokenMsg }}
+              </div>
+
+              <!-- Token buttons row -->
+              <div class="flex flex-wrap gap-2 items-center">
+                <button @click="openZerodhaLogin" :disabled="zerodha.tokenLoading"
+                  class="flex items-center gap-1.5 rounded-md px-4 py-2 text-xs font-semibold"
+                  style="background: linear-gradient(135deg,#6366f1,#4f46e5); color: #fff">
+                  <span v-if="zerodha.tokenLoading">⏳</span>
+                  <span v-else>🔑</span>
+                  {{ zerodha.hasToken && !zerodha.expired ? 'Refresh Token' : 'Generate Token' }}
+                </button>
+
+                <button v-if="zerodha.hasToken && !zerodha.expired" @click="fetchZerodhaBalance"
+                  :disabled="zerodha.balanceLoading"
+                  class="flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-semibold"
+                  style="background: var(--surface); border: 1px solid var(--border); color: var(--muted)">
+                  {{ zerodha.balanceLoading ? '…' : '↻ Refresh Balance' }}
+                </button>
+
+                <a v-if="zerodha.hasToken && !zerodha.expired"
+                  :href="zerodhaFundsUrl" target="_blank" rel="noopener"
+                  class="flex items-center gap-1.5 rounded-md px-4 py-2 text-xs font-semibold"
+                  style="background: rgba(0,220,130,0.12); border: 1px solid rgba(0,220,130,0.3); color: var(--bull); text-decoration: none">
+                  💰 Add Funds
+                </a>
+              </div>
+
+              <!-- Manual request-token input (shown after login window opens) -->
+              <div v-if="showManualTokenInput" class="mt-3 flex gap-2">
+                <input v-model="manualRequestToken" type="text"
+                  placeholder="Paste request_token from redirect URL…"
+                  class="flex-1 rounded-md px-3 py-2 text-xs"
+                  style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
+                <button @click="exchangeToken(manualRequestToken)" :disabled="zerodha.tokenExchanging || !manualRequestToken"
+                  class="rounded-md px-4 py-2 text-xs font-semibold"
+                  style="background: var(--accent); color: #fff">
+                  {{ zerodha.tokenExchanging ? '…' : 'Verify' }}
+                </button>
+              </div>
+
+              <!-- Balance cards -->
+              <div v-if="zerodha.hasToken && !zerodha.expired && (zerodha.equity || zerodha.commodity)"
+                class="mt-4 grid grid-cols-2 gap-3">
+                <div v-if="zerodha.equity" class="rounded-lg p-3"
+                  style="background: var(--surface); border: 1px solid var(--border)">
+                  <p class="text-[10px] uppercase tracking-wider mb-2" style="color: var(--dim)">Equity Segment</p>
+                  <div class="flex justify-between items-end">
+                    <div>
+                      <p class="text-[10px]" style="color: var(--dim)">Available</p>
+                      <p class="text-base font-bold" style="color: var(--bull)">₹ {{ zerodha.equity.available }}</p>
+                    </div>
+                    <div class="text-right">
+                      <p class="text-[10px]" style="color: var(--dim)">Used</p>
+                      <p class="text-sm font-semibold" style="color: var(--bear)">₹ {{ zerodha.equity.used }}</p>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="zerodha.commodity" class="rounded-lg p-3"
+                  style="background: var(--surface); border: 1px solid var(--border)">
+                  <p class="text-[10px] uppercase tracking-wider mb-2" style="color: var(--dim)">Commodity Segment</p>
+                  <div class="flex justify-between items-end">
+                    <div>
+                      <p class="text-[10px]" style="color: var(--dim)">Available</p>
+                      <p class="text-base font-bold" style="color: var(--bull)">₹ {{ zerodha.commodity.available }}</p>
+                    </div>
+                    <div class="text-right">
+                      <p class="text-[10px]" style="color: var(--dim)">Used</p>
+                      <p class="text-sm font-semibold" style="color: var(--bear)">₹ {{ zerodha.commodity.used }}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+          <!-- ── end Zerodha section ─────────────────────────────────────── -->
+
+          <!-- Action row -->
           <div class="flex gap-2 mt-4">
-            <button @click="saveExchange(ex)" :disabled="store.saving"
+            <button @click="saveExchange(ex)" :disabled="ex.saving"
               class="rounded-md px-4 py-2 text-xs font-semibold"
               style="background: var(--accent); color: #fff">
-              {{ store.saving ? 'Saving...' : 'Save' }}
+              {{ ex.saving ? 'Saving…' : 'Save' }}
             </button>
             <button @click="testExchange(ex)" :disabled="ex.testing"
               class="rounded-md px-4 py-2 text-xs font-semibold"
               style="background: var(--surface); border: 1px solid var(--border); color: var(--muted)">
-              {{ ex.testing ? 'Testing...' : 'Test Connection' }}
+              {{ ex.testing ? 'Testing…' : 'Test Connection' }}
             </button>
           </div>
         </div>
@@ -234,7 +500,8 @@ async function saveBackup() {
         <div class="space-y-2">
           <div v-for="eng in engines" :key="eng.key" class="rounded-xl overflow-hidden"
             style="background: var(--card); border: 1px solid var(--border)">
-            <div class="flex items-center gap-3 p-4 cursor-pointer" @click="eng.params.length ? expandedEngine = (expandedEngine === eng.key ? null : eng.key) : null">
+            <div class="flex items-center gap-3 p-4 cursor-pointer"
+              @click="eng.params.length ? (expandedEngine = expandedEngine === eng.key ? null : eng.key) : null">
               <div class="flex-1">
                 <h3 class="font-medium text-sm" style="color: var(--text)">{{ eng.name }}</h3>
               </div>
@@ -261,10 +528,10 @@ async function saveBackup() {
             </div>
           </div>
         </div>
-        <button @click="saveEngines" :disabled="store.saving"
+        <button @click="saveEngines" :disabled="engineSaving"
           class="mt-4 rounded-md px-4 py-2 text-xs font-semibold"
           style="background: var(--accent); color: #fff">
-          {{ store.saving ? 'Saving...' : 'Save Engine Settings' }}
+          {{ engineSaving ? 'Saving…' : 'Save Engine Settings' }}
         </button>
       </div>
 
@@ -294,14 +561,14 @@ async function saveBackup() {
           </div>
           <div class="mt-4">
             <label class="block text-[10px] mb-1 uppercase tracking-wider" style="color: var(--dim)">Telegram Webhook URL</label>
-            <input v-model="systemValues.telegram_webhook" type="url" placeholder="https://api.telegram.org/bot..."
+            <input v-model="systemValues.telegram_webhook" type="url" placeholder="https://api.telegram.org/bot…"
               class="w-full rounded-md px-3 py-2 text-sm"
               style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
           </div>
-          <button @click="saveSystem" :disabled="store.saving"
+          <button @click="saveSystem" :disabled="systemSaving"
             class="mt-4 rounded-md px-4 py-2 text-xs font-semibold"
             style="background: var(--accent); color: #fff">
-            {{ store.saving ? 'Saving...' : 'Save System Settings' }}
+            {{ systemSaving ? 'Saving…' : 'Save System Settings' }}
           </button>
         </div>
 
@@ -362,10 +629,10 @@ async function saveBackup() {
             </div>
           </div>
 
-          <!-- Scope checkboxes -->
+          <!-- Backup scope -->
           <div class="mt-4">
             <label class="block text-[10px] mb-2 uppercase tracking-wider" style="color: var(--dim)">Backup Scope</label>
-            <div class="flex gap-4">
+            <div class="flex gap-4 flex-wrap">
               <label v-for="scope in ['candles', 'waves', 'settings', 'trades']" :key="scope"
                 class="flex items-center gap-2 text-xs cursor-pointer" style="color: var(--muted)">
                 <input type="checkbox" v-model="backupValues[`scope_${scope}`]"
@@ -376,12 +643,13 @@ async function saveBackup() {
           </div>
         </div>
 
-        <button @click="saveBackup" :disabled="store.saving"
+        <button @click="saveBackup" :disabled="backupSaving"
           class="rounded-md px-4 py-2 text-xs font-semibold"
           style="background: var(--accent); color: #fff">
-          {{ store.saving ? 'Saving...' : 'Save Backup Settings' }}
+          {{ backupSaving ? 'Saving…' : 'Save Backup Settings' }}
         </button>
       </div>
+
     </div>
   </div>
 </template>

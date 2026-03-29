@@ -54,8 +54,12 @@ Route::prefix('v1')->group(function () {
     // Settings
     Route::get('settings', [SettingsController::class, 'index']);
     Route::put('settings', [SettingsController::class, 'update']);
-    Route::get('settings/{group}', [SettingsController::class, 'group']);
     Route::post('settings/test', [SettingsController::class, 'testConnection']);
+    // Zerodha token flow (must be before settings/{group} wildcard)
+    Route::get('settings/zerodha/login-url', [SettingsController::class, 'zerodhaLoginUrl']);
+    Route::post('settings/zerodha/exchange-token', [SettingsController::class, 'zerodhaExchangeToken']);
+    Route::get('settings/zerodha/balance', [SettingsController::class, 'zerodhaBalance']);
+    Route::get('settings/{group}', [SettingsController::class, 'group']);
 
     // Data gaps
     Route::get('gaps', [GapController::class, 'index']);

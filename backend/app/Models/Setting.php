@@ -40,9 +40,11 @@ class Setting extends Model
 
     public static function set(string $key, ?string $value, string $group = 'general', bool $encrypted = false): void
     {
+        // 'encrypted' MUST come before 'value' so the setValueAttribute mutator
+        // can read $this->encrypted correctly when encrypting on new records.
         static::updateOrCreate(
             ['key' => $key],
-            ['value' => $value, 'group' => $group, 'encrypted' => $encrypted]
+            ['encrypted' => $encrypted, 'group' => $group, 'value' => $value]
         );
     }
 }
