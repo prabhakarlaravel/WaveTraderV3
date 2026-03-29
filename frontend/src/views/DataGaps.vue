@@ -69,15 +69,22 @@ async function fillGap(tf) {
 
     clearInterval(progressTimer)
     const elapsed = ((Date.now() - fillProgress[tf].startTime) / 1000).toFixed(1)
-    fillProgress[tf] = { status: 'done', filled: totalMissing, total: totalMissing, pct: 100, elapsed: `${elapsed}s` }
-    addLog(`${tf} gap filled — ${totalMissing} candles in ${elapsed}s`, '#34d399')
+    const actualFilled = data.filled || 0
 
-    // Refresh scan data
+    if (data.success) {
+      fillProgress[tf] = { status: 'done', filled: actualFilled, total: totalMissing, pct: 100, elapsed: `${elapsed}s` }
+      addLog(`✓ ${tf} filled — ${actualFilled} candles fetched in ${elapsed}s`, '#34d399')
+    } else {
+      fillProgress[tf] = { status: 'error', filled: 0, total: totalMissing, pct: 0, elapsed: `${elapsed}s` }
+      addLog(`✕ ${tf}: ${data.message}`, '#ef5350')
+    }
+
+    // Refresh scan data after fill
     await smartScan()
   } catch (e) {
     clearInterval(progressTimer)
     fillProgress[tf] = { ...fillProgress[tf], status: 'error' }
-    addLog(`${tf} fill failed: ${e.message}`, '#ef5350')
+    addLog(`✕ ${tf} fill failed: ${e.response?.data?.message || e.message}`, '#ef5350')
   } finally {
     fillingTf.value = ''
   }

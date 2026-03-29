@@ -23,17 +23,9 @@ class GapDetectionService
         '1H' => 60, '4H' => 240, '1D' => 1440,
     ];
 
-    // Market hours per exchange
-    private const MARKET_HOURS = [
-        'binance' => ['type' => '24/7'],
-        'zerodha' => ['type' => 'session', 'open' => '03:45', 'close' => '10:00', 'days' => [1, 2, 3, 4, 5]], // UTC (9:15-15:30 IST)
-        'oanda' => ['type' => 'forex', 'open_day' => 0, 'open_hour' => 22, 'close_day' => 5, 'close_hour' => 22], // UTC
-        'yahoo' => ['type' => '24/7'], // fallback
-    ];
-
     /**
-     * Smart scan: detect ALL gaps including trailing gap (last candle vs now).
-     * Returns gaps grouped by timeframe with visual timeline data.
+     * Smart scan: detect ALL gaps across all TFs for a symbol.
+     * For higher TFs (5M+), checks if gap can be filled from existing 1M data.
      */
     public function smartScan(Symbol $symbol): array
     {
@@ -41,6 +33,9 @@ class GapDetectionService
         $exchange = $symbol->exchange;
         $results = [];
         $allGaps = [];
+
+        // First, clear stale gap records for this symbol
+        DataGap::where('symbol_id', $symbol->id)->delete();
 
         foreach ($timeframes as $tf) {
             $tfResult = $this->scanTimeframe($symbol, $tf, $exchange);
@@ -51,13 +46,12 @@ class GapDetectionService
             }
         }
 
-        // Group overlapping gaps across TFs
         $groupedGaps = $this->groupGaps($allGaps);
 
         return [
             'symbol' => $symbol->ticker,
             'exchange' => $exchange,
-            'marketType' => self::MARKET_HOURS[$exchange]['type'] ?? '24/7',
+            'marketType' => $this->getMarketType($exchange),
             'timeframes' => $results,
             'groupedGaps' => $groupedGaps,
             'totalGaps' => count($allGaps),
@@ -65,7 +59,7 @@ class GapDetectionService
     }
 
     /**
-     * Scan a single timeframe for gaps (internal + trailing).
+     * Scan a single timeframe for gaps.
      */
     private function scanTimeframe(Symbol $symbol, string $tf, string $exchange): array
     {
@@ -84,7 +78,7 @@ class GapDetectionService
                 'totalCandles' => $totalCandles,
                 'gaps' => [],
                 'gapCount' => 0,
-                'healthPct' => $totalCandles > 0 ? 100 : 0,
+                'healthPct' => 0,
                 'timeline' => [],
             ];
         }
@@ -92,110 +86,98 @@ class GapDetectionService
         $gaps = [];
         $firstCandle = $candles->first();
         $lastCandle = $candles->last();
+        $now = Carbon::now()->utc();
         $timelineSegments = [];
-        $lastGoodEnd = $firstCandle;
+        $segStart = $firstCandle->copy();
 
-        // 1. Internal gaps: scan consecutive candle pairs
+        // Threshold: a gap is when the next candle is more than 1.5x the interval away
+        $thresholdMinutes = (int) ceil($intervalMinutes * 1.5);
+
+        // 1. Scan consecutive candle pairs for internal gaps
         for ($i = 1; $i < $candles->count(); $i++) {
             $prev = $candles[$i - 1];
             $curr = $candles[$i];
-            $expectedNext = $prev->copy()->addMinutes($intervalMinutes);
-            $diffMinutes = (int) $prev->diffInMinutes($curr);
+            $diffMinutes = (int) abs($prev->diffInMinutes($curr));
 
-            // Gap threshold: more than 1.5x the interval
-            $threshold = (int) ceil($intervalMinutes * 1.5);
+            if ($diffMinutes > $thresholdMinutes) {
+                // Check market hours
+                if (! $this->isMarketClosed($prev, $curr, $exchange)) {
+                    $gapStart = $prev->copy()->addMinutes($intervalMinutes);
+                    $missingCandles = max(0, (int) floor($diffMinutes / $intervalMinutes) - 1);
 
-            if ($diffMinutes > $threshold) {
-                // Check if this gap falls within market hours
-                if ($this->isMarketOpen($expectedNext, $curr, $exchange)) {
-                    $missingCandles = (int) floor($diffMinutes / $intervalMinutes) - 1;
-
-                    // Add "good" segment before gap
-                    if ($lastGoodEnd->lt($prev)) {
-                        $timelineSegments[] = ['type' => 'ok', 'start' => $lastGoodEnd->toIso8601String(), 'end' => $prev->toIso8601String()];
-                    }
-
-                    // Add gap segment
-                    $timelineSegments[] = [
-                        'type' => 'gap',
-                        'start' => $expectedNext->toIso8601String(),
-                        'end' => $curr->toIso8601String(),
-                    ];
+                    // Timeline: OK segment before gap
+                    $timelineSegments[] = ['type' => 'ok', 'start' => $segStart->toIso8601String(), 'end' => $prev->toIso8601String()];
+                    // Gap segment
+                    $timelineSegments[] = ['type' => 'gap', 'start' => $gapStart->toIso8601String(), 'end' => $curr->toIso8601String()];
+                    $segStart = $curr->copy();
 
                     $gaps[] = [
                         'gapType' => 'internal',
-                        'gapStart' => $expectedNext->toIso8601String(),
+                        'gapStart' => $gapStart->toIso8601String(),
                         'gapEnd' => $curr->toIso8601String(),
                         'durationMinutes' => $diffMinutes,
                         'missingCandles' => $missingCandles,
                     ];
 
-                    // Persist to data_gaps table
-                    DataGap::firstOrCreate([
+                    // Store in DB
+                    DataGap::create([
                         'symbol_id' => $symbol->id,
                         'timeframe' => $tf,
-                        'gap_start' => $expectedNext,
+                        'gap_start' => $gapStart,
                         'gap_end' => $curr,
                     ]);
-
-                    $lastGoodEnd = $curr;
                 }
             }
         }
 
-        // 2. Trailing gap: last candle vs NOW
-        $now = Carbon::now()->utc();
-        $lastCandleTime = $lastCandle->copy();
-        $trailingMinutes = (int) $lastCandleTime->diffInMinutes($now);
-        $trailingThreshold = (int) ceil($intervalMinutes * 2);
+        // 2. Trailing gap: last candle vs now
+        $trailingMinutes = (int) abs($lastCandle->diffInMinutes($now));
+        if ($trailingMinutes > $thresholdMinutes * 2 && ! $this->isMarketClosed($lastCandle, $now, $exchange)) {
+            $gapStart = $lastCandle->copy()->addMinutes($intervalMinutes);
+            $missingCandles = max(0, (int) floor($trailingMinutes / $intervalMinutes) - 1);
 
-        if ($trailingMinutes > $trailingThreshold && $this->isMarketOpen($lastCandleTime, $now, $exchange)) {
-            $missingCandles = (int) floor($trailingMinutes / $intervalMinutes) - 1;
-            $trailingStart = $lastCandleTime->copy()->addMinutes($intervalMinutes);
+            // Timeline: OK segment then trailing gap
+            $timelineSegments[] = ['type' => 'ok', 'start' => $segStart->toIso8601String(), 'end' => $lastCandle->toIso8601String()];
+            $timelineSegments[] = ['type' => 'gap', 'start' => $gapStart->toIso8601String(), 'end' => $now->toIso8601String()];
 
             $gaps[] = [
                 'gapType' => 'trailing',
-                'gapStart' => $trailingStart->toIso8601String(),
+                'gapStart' => $gapStart->toIso8601String(),
                 'gapEnd' => $now->toIso8601String(),
                 'durationMinutes' => $trailingMinutes,
                 'missingCandles' => $missingCandles,
             ];
 
-            DataGap::firstOrCreate([
+            DataGap::create([
                 'symbol_id' => $symbol->id,
                 'timeframe' => $tf,
-                'gap_start' => $trailingStart,
+                'gap_start' => $gapStart,
                 'gap_end' => $now,
             ]);
-
-            // Timeline: good segment then trailing gap
-            if ($lastGoodEnd->lt($lastCandleTime)) {
-                $timelineSegments[] = ['type' => 'ok', 'start' => $lastGoodEnd->toIso8601String(), 'end' => $lastCandleTime->toIso8601String()];
-            }
-            $timelineSegments[] = ['type' => 'gap', 'start' => $trailingStart->toIso8601String(), 'end' => $now->toIso8601String()];
         } else {
-            // No trailing gap — last segment is OK until now
-            if ($lastGoodEnd->lt($now)) {
-                $timelineSegments[] = ['type' => 'ok', 'start' => $lastGoodEnd->toIso8601String(), 'end' => $now->toIso8601String()];
-            }
+            // No trailing gap — close the last OK segment
+            $timelineSegments[] = ['type' => 'ok', 'start' => $segStart->toIso8601String(), 'end' => $now->toIso8601String()];
         }
 
-        // Calculate health as percentage of data coverage
-        $totalSpanMinutes = max(1, (int) $firstCandle->diffInMinutes($now));
+        // Calculate health
+        $totalSpanMinutes = max(1, (int) abs($firstCandle->diffInMinutes($now)));
         $gapMinutes = array_sum(array_column($gaps, 'durationMinutes'));
         $healthPct = max(0, min(100, (int) round(100 - ($gapMinutes / $totalSpanMinutes * 100))));
 
-        // Build normalized timeline (0-100% for frontend rendering)
+        // Normalize timeline to 0-100%
         $normalizedTimeline = [];
         foreach ($timelineSegments as $seg) {
-            $segStart = Carbon::parse($seg['start']);
-            $segEnd = Carbon::parse($seg['end']);
-            $startPct = max(0, min(100, $firstCandle->diffInMinutes($segStart) / $totalSpanMinutes * 100));
-            $endPct = max(0, min(100, $firstCandle->diffInMinutes($segEnd) / $totalSpanMinutes * 100));
+            $sStart = Carbon::parse($seg['start']);
+            $sEnd = Carbon::parse($seg['end']);
+            $startPct = $totalSpanMinutes > 0 ? abs($firstCandle->diffInMinutes($sStart)) / $totalSpanMinutes * 100 : 0;
+            $widthPct = $totalSpanMinutes > 0 ? abs($sStart->diffInMinutes($sEnd)) / $totalSpanMinutes * 100 : 0;
+            if ($widthPct < 0.3) {
+                continue;
+            } // skip tiny segments
             $normalizedTimeline[] = [
                 'type' => $seg['type'],
-                'startPct' => round($startPct, 1),
-                'widthPct' => round(max(0.5, $endPct - $startPct), 1),
+                'startPct' => round(min(100, $startPct), 1),
+                'widthPct' => round(max(0.5, min(100, $widthPct)), 1),
                 'start' => $seg['start'],
                 'end' => $seg['end'],
             ];
@@ -208,53 +190,199 @@ class GapDetectionService
             'gapCount' => count($gaps),
             'healthPct' => $healthPct,
             'timeline' => $normalizedTimeline,
-            'firstCandle' => $firstCandle->toIso8601String(),
-            'lastCandle' => $lastCandle->toIso8601String(),
         ];
     }
 
     /**
-     * Check if market was open during a time range (for gap filtering).
+     * Check if market was closed during this period (so the gap is expected).
      */
-    private function isMarketOpen(Carbon $from, Carbon $to, string $exchange): bool
+    private function isMarketClosed(Carbon $from, Carbon $to, string $exchange): bool
     {
-        $config = self::MARKET_HOURS[$exchange] ?? ['type' => '24/7'];
-
-        if ($config['type'] === '24/7') {
-            return true; // Crypto — every gap is real
+        // Crypto markets are 24/7 — no expected closures
+        if (in_array($exchange, ['binance'])) {
+            return false;
         }
 
-        if ($config['type'] === 'forex') {
-            // Forex is closed Sat-Sun (Fri 10PM UTC to Sun 10PM UTC)
-            $isSaturday = $from->dayOfWeek === 6;
-            $isSunday = $from->dayOfWeek === 0 && $from->hour < $config['open_hour'];
-            $isFridayLate = $from->dayOfWeek === 5 && $from->hour >= $config['close_hour'];
-
-            return ! ($isSaturday || $isSunday || $isFridayLate);
+        // Forex: closed Sat + most of Sunday
+        if (in_array($exchange, ['oanda'])) {
+            $fromDay = $from->dayOfWeek;
+            if ($fromDay === 6) {
+                return true;
+            } // Saturday
+            if ($fromDay === 5 && $from->hour >= 22) {
+                return true;
+            } // Friday after 10pm
+            if ($fromDay === 0 && $to->dayOfWeek === 0 && $to->hour < 22) {
+                return true;
+            } // Sunday before 10pm
         }
 
-        if ($config['type'] === 'session') {
-            // Session-based (NSE) — check if both from and to are within trading days
-            $openParts = explode(':', $config['open']);
-            $closeParts = explode(':', $config['close']);
-            $openHour = (int) $openParts[0];
-            $openMin = (int) ($openParts[1] ?? 0);
-            $closeHour = (int) $closeParts[0];
-            $closeMin = (int) ($closeParts[1] ?? 0);
-
-            // Check if the gap spans a non-trading period
-            $fromInSession = in_array($from->dayOfWeek, $config['days'])
-                && ($from->hour > $openHour || ($from->hour === $openHour && $from->minute >= $openMin))
-                && ($from->hour < $closeHour || ($from->hour === $closeHour && $from->minute <= $closeMin));
-
-            return $fromInSession;
+        // NSE: only open Mon-Fri 3:45-10:00 UTC (9:15-15:30 IST)
+        if (in_array($exchange, ['zerodha'])) {
+            $fromDay = $from->dayOfWeek;
+            if ($fromDay === 0 || $fromDay === 6) {
+                return true;
+            } // Weekend
+            if ($from->hour < 3 || $from->hour >= 10) {
+                return true;
+            } // Outside session
         }
 
-        return true;
+        return false;
     }
 
     /**
-     * Group gaps that overlap in time across multiple timeframes.
+     * Fill gaps by fetching missing candles from exchange.
+     * Strategy:
+     * - For 1M: fetch directly from exchange API
+     * - For higher TFs: try to aggregate from existing 1M data first,
+     *   if 1M also has gaps, fetch 1M then aggregate
+     */
+    public function fill(Symbol $symbol, string $timeframe, ?Collection $gaps = null): int
+    {
+        if ($gaps === null) {
+            $gaps = DataGap::where('symbol_id', $symbol->id)
+                ->where('timeframe', $timeframe)
+                ->unfilled()
+                ->get();
+        }
+
+        if ($gaps->isEmpty()) {
+            Log::info("No unfilled gaps for {$symbol->ticker} [{$timeframe}]");
+
+            return 0;
+        }
+
+        $totalFetched = 0;
+
+        foreach ($gaps as $gap) {
+            if ($gap->filled_at) {
+                continue;
+            }
+
+            $from = Carbon::parse($gap->gap_start);
+            $to = Carbon::parse($gap->gap_end);
+
+            Log::info("Filling gap: {$symbol->ticker} [{$timeframe}] {$from} → {$to}");
+
+            // Strategy: always fetch 1M from exchange, then aggregate
+            $fetched = $this->fetchAndStore($symbol, '1M', $from, $to);
+            $totalFetched += $fetched;
+
+            // If this is a higher TF gap, aggregate from the fresh 1M data
+            if ($timeframe !== '1M' && $fetched > 0) {
+                $aggregated = $this->aggregateTimeframe($symbol->id, $timeframe, $from, $to);
+                $totalFetched += $aggregated;
+                Log::info("Aggregated {$aggregated} {$timeframe} candles from 1M for {$symbol->ticker}");
+            }
+
+            // Only mark as filled if we actually got candles
+            if ($fetched > 0) {
+                $gap->update(['filled_at' => Carbon::now()]);
+                Log::info("Gap filled: {$fetched} candles for {$symbol->ticker} [{$timeframe}]");
+            } else {
+                Log::warning("Gap fill returned 0 candles for {$symbol->ticker} [{$timeframe}] {$from} → {$to}");
+            }
+        }
+
+        return $totalFetched;
+    }
+
+    /**
+     * Fetch candles from exchange and upsert to DB.
+     */
+    private function fetchAndStore(Symbol $symbol, string $timeframe, Carbon $from, Carbon $to): int
+    {
+        try {
+            $dataSource = $this->resolveDataSource($symbol->exchange);
+            $candles = $dataSource->fetchCandles($symbol->ticker, $timeframe, $from, $to);
+
+            if ($candles->isEmpty()) {
+                return 0;
+            }
+
+            $mapped = $candles->map(fn (array $c) => [
+                ...$c,
+                'symbol_id' => $symbol->id,
+                'timeframe' => $timeframe,
+            ])->toArray();
+
+            Candle::upsertCandles($mapped);
+
+            return $candles->count();
+        } catch (\Throwable $e) {
+            Log::error("fetchAndStore failed: {$symbol->ticker} [{$timeframe}]: {$e->getMessage()}");
+
+            return 0;
+        }
+    }
+
+    /**
+     * Aggregate a higher timeframe from 1M base data for a specific time range.
+     */
+    private function aggregateTimeframe(int $symbolId, string $timeframe, Carbon $from, Carbon $to): int
+    {
+        $intervalMinutes = self::TIMEFRAME_MINUTES[$timeframe] ?? 5;
+
+        // Get all 1M candles in the range
+        $candles1M = Candle::where('symbol_id', $symbolId)
+            ->where('timeframe', '1M')
+            ->whereBetween('timestamp', [$from->copy()->subMinutes($intervalMinutes), $to->copy()->addMinutes($intervalMinutes)])
+            ->orderBy('timestamp')
+            ->get();
+
+        if ($candles1M->isEmpty()) {
+            return 0;
+        }
+
+        // Group into buckets
+        $buckets = [];
+        foreach ($candles1M as $c) {
+            $ts = Carbon::parse($c->timestamp);
+            $bucketMinute = (int) (floor($ts->hour * 60 + $ts->minute) / $intervalMinutes) * $intervalMinutes;
+            $bucketTime = $ts->copy()->startOfDay()->addMinutes($bucketMinute);
+            $key = $bucketTime->format('Y-m-d H:i:s');
+
+            if (! isset($buckets[$key])) {
+                $buckets[$key] = ['candles' => [], 'timestamp' => $key];
+            }
+            $buckets[$key]['candles'][] = $c;
+        }
+
+        // Aggregate each bucket into OHLCV
+        $aggregated = [];
+        foreach ($buckets as $key => $bucket) {
+            if (empty($bucket['candles'])) {
+                continue;
+            }
+
+            $first = $bucket['candles'][0];
+            $last = end($bucket['candles']);
+            $high = max(array_map(fn ($c) => (float) $c->high, $bucket['candles']));
+            $low = min(array_map(fn ($c) => (float) $c->low, $bucket['candles']));
+            $volume = array_sum(array_map(fn ($c) => (float) $c->volume, $bucket['candles']));
+
+            $aggregated[] = [
+                'symbol_id' => $symbolId,
+                'timeframe' => $timeframe,
+                'timestamp' => $bucket['timestamp'],
+                'open' => (float) $first->open,
+                'high' => $high,
+                'low' => $low,
+                'close' => (float) $last->close,
+                'volume' => $volume,
+            ];
+        }
+
+        if (! empty($aggregated)) {
+            Candle::upsertCandles($aggregated);
+        }
+
+        return count($aggregated);
+    }
+
+    /**
+     * Group overlapping gaps across multiple timeframes.
      */
     private function groupGaps(array $allGaps): array
     {
@@ -262,16 +390,12 @@ class GapDetectionService
             return [];
         }
 
-        // Sort by gap_start
         usort($allGaps, fn ($a, $b) => strcmp($a['gapStart'], $b['gapStart']));
 
         $grouped = [];
         $current = null;
 
         foreach ($allGaps as $gap) {
-            $gapStart = Carbon::parse($gap['gapStart']);
-            $gapEnd = Carbon::parse($gap['gapEnd']);
-
             if ($current === null) {
                 $current = [
                     'gapStart' => $gap['gapStart'],
@@ -285,9 +409,11 @@ class GapDetectionService
             }
 
             $currentEnd = Carbon::parse($current['gapEnd']);
+            $gapStart = Carbon::parse($gap['gapStart']);
 
-            // If this gap overlaps or is within 30 min of the current group
-            if ($gapStart->diffInMinutes($currentEnd) < 30) {
+            // Merge if overlapping or within 60 min
+            if (abs($gapStart->diffInMinutes($currentEnd)) < 60 || $gapStart->lte($currentEnd)) {
+                $gapEnd = Carbon::parse($gap['gapEnd']);
                 if ($gapEnd->gt($currentEnd)) {
                     $current['gapEnd'] = $gap['gapEnd'];
                     $current['durationMinutes'] = max($current['durationMinutes'], $gap['durationMinutes']);
@@ -320,11 +446,12 @@ class GapDetectionService
     }
 
     /**
-     * Old detect method (kept for backward compat).
+     * Old detect method (backward compat).
      */
     public function detect(Symbol $symbol, string $timeframe): Collection
     {
-        $result = $this->scanTimeframe($symbol, $timeframe, $symbol->exchange);
+        // Trigger a scan for this specific TF
+        $this->scanTimeframe($symbol, $timeframe, $symbol->exchange);
 
         return DataGap::where('symbol_id', $symbol->id)
             ->where('timeframe', $timeframe)
@@ -332,52 +459,14 @@ class GapDetectionService
             ->get();
     }
 
-    /**
-     * Fill gaps by fetching candles from exchange.
-     */
-    public function fill(Symbol $symbol, string $timeframe, Collection $gaps): int
+    private function getMarketType(string $exchange): string
     {
-        $dataSource = $this->resolveDataSource($symbol->exchange);
-        $totalFilled = 0;
-
-        foreach ($gaps as $gap) {
-            if ($gap->filled_at) {
-                continue;
-            }
-
-            try {
-                $from = Carbon::parse($gap->gap_start);
-                $to = Carbon::parse($gap->gap_end);
-
-                // For higher TFs, fetch 1M and let aggregation handle it
-                $fetchTf = $timeframe;
-                if (in_array($timeframe, ['5M', '15M', '1H', '4H', '1D'])) {
-                    $fetchTf = '1M';
-                }
-
-                $candles = $dataSource->fetchCandles($symbol->ticker, $fetchTf, $from, $to);
-
-                if ($candles->isNotEmpty()) {
-                    $mapped = $candles->map(fn (array $c) => [...$c, 'symbol_id' => $symbol->id])->toArray();
-                    Candle::upsertCandles($mapped);
-                    $totalFilled += $candles->count();
-
-                    // If we fetched 1M, aggregate to higher TFs
-                    if ($fetchTf === '1M' && $timeframe !== '1M') {
-                        $aggregator = new CandleAggregationService();
-                        $aggregator->aggregateFromOneMinute($symbol->id);
-                    }
-
-                    Log::info("Gap filled: {$symbol->ticker} [{$timeframe}] {$gap->gap_start} → {$gap->gap_end}: {$candles->count()} candles");
-                }
-
-                $gap->update(['filled_at' => Carbon::now()]);
-            } catch (\Throwable $e) {
-                Log::warning("Gap fill failed for {$symbol->ticker} [{$timeframe}]: {$e->getMessage()}");
-            }
-        }
-
-        return $totalFilled;
+        return match ($exchange) {
+            'binance' => '24/7',
+            'zerodha' => 'NSE Session',
+            'oanda' => 'Forex',
+            default => 'Unknown',
+        };
     }
 
     private function resolveDataSource(string $exchange): DataSourceInterface

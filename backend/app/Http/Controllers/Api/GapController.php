@@ -59,9 +59,24 @@ class GapController extends Controller
             ->unfilled()
             ->get();
 
+        if ($gaps->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => "No unfilled gaps found for {$request->timeframe}",
+                'filled' => 0,
+            ]);
+        }
+
         $filledCount = $gapService->fill($symbol, $request->timeframe, $gaps);
 
-        return response()->json(['message' => "Filled {$gaps->count()} gaps ({$filledCount} candles fetched)"]);
+        return response()->json([
+            'success' => $filledCount > 0,
+            'message' => $filledCount > 0
+                ? "Filled {$gaps->count()} gap(s) — {$filledCount} candles fetched from exchange"
+                : "No candles could be fetched. Exchange may be unreachable.",
+            'filled' => $filledCount,
+            'gapsProcessed' => $gaps->count(),
+        ]);
     }
 
     public function health(): JsonResponse
