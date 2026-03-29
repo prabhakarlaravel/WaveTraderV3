@@ -8,35 +8,52 @@ use App\Engines\ElliottWaveEngine;
 use App\Engines\MarketStructureEngine;
 use App\Models\Candle;
 use App\Models\DataGap;
+use App\Models\Setting;
 use App\Models\Symbol;
-use Illuminate\Support\Facades\DB;
 
 class WaveHealthService
 {
+    private const TIMEFRAMES = ['1D', '4H', '1H', '15M', '5M', '1M'];
+
     /**
-     * Full validation across all TFs for a symbol.
+     * Get the saved swing strength for a symbol+timeframe, or default.
+     */
+    private function getSwingStrength(int $symbolId, string $timeframe): int
+    {
+        $key = "swing_strength_{$symbolId}_{$timeframe}";
+        $saved = Setting::get($key);
+
+        return $saved ? (int) $saved : 5;
+    }
+
+    /**
+     * Save optimal swing strength for a symbol+timeframe.
+     */
+    private function saveSwingStrength(int $symbolId, string $timeframe, int $strength): void
+    {
+        $key = "swing_strength_{$symbolId}_{$timeframe}";
+        Setting::set($key, (string) $strength, 'engine');
+    }
+
+    /**
+     * Full validation across all TFs.
      */
     public function validateAll(int $symbolId): array
     {
         $symbol = Symbol::findOrFail($symbolId);
-        $timeframes = ['1D', '4H', '1H', '15M', '5M', '1M'];
 
         $tfResults = [];
         $totalViolations = 0;
         $criticalCount = 0;
-        $warningCount = 0;
         $fixableCount = 0;
         $totalScore = 0;
 
-        foreach ($timeframes as $tf) {
+        foreach (self::TIMEFRAMES as $tf) {
             $health = $this->analyzeTimeframe($symbol, $tf);
-            $dataCheck = $this->checkDataIntegrity($symbol->id, $tf);
-
-            // Test if fixable with alternate parameters
+            $dataCheck = $this->checkDataIntegrity($symbolId, $tf);
             $bestAlt = $this->findBestParameters($symbol, $tf);
 
             $health['data_check'] = $dataCheck;
-            $health['swing_strength'] = 5;
             $health['fixable'] = $bestAlt['improved'];
             $health['best_alt'] = $bestAlt;
 
@@ -44,8 +61,6 @@ class WaveHealthService
                 $totalViolations++;
                 if (($v['severity'] ?? 'warning') === 'critical') {
                     $criticalCount++;
-                } else {
-                    $warningCount++;
                 }
             }
             if ($bestAlt['improved']) {
@@ -56,77 +71,45 @@ class WaveHealthService
             $tfResults[] = $health;
         }
 
-        $overallIntegrity = $this->checkOverallDataIntegrity($symbolId);
-
         return [
             'symbol' => $symbol->ticker,
-            'overallHealth' => count($timeframes) > 0 ? round($totalScore / count($timeframes)) : 0,
+            'overallHealth' => count(self::TIMEFRAMES) > 0 ? round($totalScore / count(self::TIMEFRAMES)) : 0,
             'totalViolations' => $totalViolations,
             'criticalCount' => $criticalCount,
-            'warningCount' => $warningCount,
+            'warningCount' => $totalViolations - $criticalCount,
             'fixableCount' => $fixableCount,
-            'dataIntegrity' => $overallIntegrity,
+            'dataIntegrity' => $this->checkOverallDataIntegrity($symbolId),
             'timeframes' => $tfResults,
         ];
     }
 
     /**
-     * Analyze wave health using the ElliottWaveEngine for accurate wave detection.
+     * Analyze wave health using saved optimal parameters.
      */
     public function analyzeTimeframe(Symbol $symbol, string $timeframe): array
     {
-        $candles = Candle::where('symbol_id', $symbol->id)
-            ->where('timeframe', $timeframe)
-            ->orderBy('timestamp')
-            ->get()
-            ->toArray();
+        $candles = $this->getCandles($symbol->id, $timeframe);
 
         if (count($candles) < 30) {
-            return [
-                'symbol' => $symbol->ticker,
-                'timeframe' => $timeframe,
-                'score' => 0,
-                'status' => 'no_data',
-                'violations' => [],
-                'wave_count' => 0,
-                'trend' => 'neutral',
-                'current_wave' => null,
-                'phase' => null,
-                'swing_count' => 0,
-                'bos_count' => 0,
-            ];
+            return $this->emptyResult($symbol->ticker, $timeframe);
         }
 
-        // Use ElliottWaveEngine for wave analysis
+        $swingStrength = $this->getSwingStrength($symbol->id, $timeframe);
+
+        // Run engines with saved parameters
         $ewEngine = new ElliottWaveEngine();
         $ewResult = $ewEngine->run($candles, $symbol->ticker, $timeframe);
 
-        // Use MarketStructureEngine for trend
-        $msEngine = new MarketStructureEngine(5);
+        $msEngine = new MarketStructureEngine($swingStrength);
         $msResult = $msEngine->run($candles, $symbol->ticker, $timeframe);
 
-        $healthScore = $ewResult->metadata['health_score'] ?? 100;
-        $violations = $ewResult->metadata['violations'] ?? [];
-        $currentWave = $ewResult->metadata['current_wave'] ?? null;
-        $phase = $ewResult->metadata['phase'] ?? null;
-        $waveCount = $ewResult->metadata['wave_count'] ?? 0;
-        $trend = $msResult->metadata['trend'] ?? 'neutral';
-        $swingCount = $msResult->metadata['swing_count'] ?? 0;
-        $bosCount = $msResult->metadata['bos_count'] ?? 0;
-
-        // Validate Elliott Wave rules on the detected wave labels
         $waveLabels = $ewResult->overlays['waveLabels'] ?? [];
-        $ruleViolations = $this->validateWaveRules($waveLabels);
+        $violations = $this->validateWaveRules($waveLabels);
+        $score = max(0, 100 - count($violations) * 15);
 
-        // Merge engine violations with rule violations (avoid duplicates)
-        $allViolations = $ruleViolations;
-
-        // Recalculate score based on violations
-        $score = max(0, 100 - count($allViolations) * 15);
-
-        // Bonus for clear trend
-        if ($bosCount > 3) {
-            $bos = $msResult->overlays['bos'] ?? [];
+        // Trend clarity bonus
+        $bos = $msResult->overlays['bos'] ?? [];
+        if (count($bos) > 3) {
             $recentBos = array_slice($bos, -5);
             $bullCount = count(array_filter($recentBos, fn ($b) => $b['direction'] === 'buy'));
             $bearCount = count($recentBos) - $bullCount;
@@ -135,147 +118,126 @@ class WaveHealthService
             }
         }
 
-        $status = $score >= 75 ? 'valid' : ($score >= 50 ? 'caution' : 'invalidated');
-
         return [
             'symbol' => $symbol->ticker,
             'timeframe' => $timeframe,
             'score' => $score,
-            'status' => $status,
-            'violations' => $allViolations,
-            'wave_count' => $waveCount,
-            'current_wave' => $currentWave,
-            'phase' => $phase,
-            'trend' => $trend,
-            'swing_count' => $swingCount,
-            'bos_count' => $bosCount,
+            'status' => $score >= 75 ? 'valid' : ($score >= 50 ? 'caution' : 'invalidated'),
+            'violations' => $violations,
+            'wave_count' => $ewResult->metadata['wave_count'] ?? 0,
+            'current_wave' => $ewResult->metadata['current_wave'] ?? null,
+            'phase' => $ewResult->metadata['phase'] ?? null,
+            'trend' => $msResult->metadata['trend'] ?? 'neutral',
+            'swing_count' => $msResult->metadata['swing_count'] ?? 0,
+            'bos_count' => $msResult->metadata['bos_count'] ?? 0,
+            'swing_strength' => $swingStrength,
         ];
     }
 
     /**
-     * Dashboard: health across all TFs (simple version).
+     * Auto-fix: test parameters, SAVE the best one, and REGENERATE waves.
      */
-    public function dashboard(int $symbolId): array
+    public function autoFix(int $symbolId, string $timeframe): array
     {
         $symbol = Symbol::findOrFail($symbolId);
-        $timeframes = ['1D', '4H', '1H', '15M', '5M', '1M'];
+        $bestAlt = $this->findBestParameters($symbol, $timeframe);
+        $currentStrength = $this->getSwingStrength($symbolId, $timeframe);
+
+        if (! $bestAlt['improved']) {
+            return [
+                'fixed' => false,
+                'message' => "Tested 7 swing strengths (3-10). Current sw={$currentStrength} (score={$bestAlt['currentScore']}) is already optimal.",
+                'suggestion' => 'This violation reflects actual market structure. Consider more historical data or a different timeframe.',
+                'currentScore' => $bestAlt['currentScore'],
+                'health' => $this->analyzeTimeframe($symbol, $timeframe),
+            ];
+        }
+
+        // SAVE the optimal swing strength — this is the key fix!
+        $this->saveSwingStrength($symbolId, $timeframe, $bestAlt['best']);
+
+        // REGENERATE: re-analyze with the newly saved parameter
+        $newHealth = $this->analyzeTimeframe($symbol, $timeframe);
+
+        return [
+            'fixed' => true,
+            'message' => "Swing {$currentStrength} → {$bestAlt['best']}. Score {$bestAlt['currentScore']} → {$bestAlt['bestScore']}. Setting saved.",
+            'oldSwing' => $currentStrength,
+            'newSwing' => $bestAlt['best'],
+            'oldScore' => $bestAlt['currentScore'],
+            'newScore' => $bestAlt['bestScore'],
+            'health' => $newHealth,
+        ];
+    }
+
+    /**
+     * Regenerate all waves for a symbol across all TFs.
+     * Re-runs ElliottWaveEngine + MarketStructureEngine with saved parameters.
+     */
+    public function regenerateAll(int $symbolId): array
+    {
+        $symbol = Symbol::findOrFail($symbolId);
         $results = [];
 
-        foreach ($timeframes as $tf) {
-            $results[] = $this->analyzeTimeframe($symbol, $tf);
+        foreach (self::TIMEFRAMES as $tf) {
+            $candles = $this->getCandles($symbolId, $tf);
+            if (count($candles) < 30) {
+                $results[$tf] = ['status' => 'skipped', 'reason' => 'insufficient data'];
+                continue;
+            }
+
+            $swingStrength = $this->getSwingStrength($symbolId, $tf);
+
+            // Run engines fresh
+            $ewResult = (new ElliottWaveEngine())->run($candles, $symbol->ticker, $tf);
+            $msResult = (new MarketStructureEngine($swingStrength))->run($candles, $symbol->ticker, $tf);
+
+            $waveLabels = $ewResult->overlays['waveLabels'] ?? [];
+            $violations = $this->validateWaveRules($waveLabels);
+            $score = max(0, 100 - count($violations) * 15);
+
+            $results[$tf] = [
+                'status' => 'regenerated',
+                'score' => $score,
+                'wave_count' => $ewResult->metadata['wave_count'] ?? 0,
+                'current_wave' => $ewResult->metadata['current_wave'] ?? null,
+                'violations' => count($violations),
+                'swing_strength' => $swingStrength,
+            ];
         }
 
-        return $results;
+        return [
+            'symbol' => $symbol->ticker,
+            'message' => 'All timeframes regenerated with saved optimal parameters.',
+            'timeframes' => $results,
+        ];
     }
 
     /**
-     * Validate Elliott Wave rules against wave labels.
-     */
-    private function validateWaveRules(array $waveLabels): array
-    {
-        $violations = [];
-
-        if (count($waveLabels) < 5) {
-            return $violations;
-        }
-
-        // Extract prices by wave label (use last occurrence in current cycle)
-        $w = [];
-        foreach ($waveLabels as $label) {
-            $w[$label['label']] = (float) $label['price'];
-        }
-
-        // Rule 3: Wave 3 must not be the shortest impulse wave
-        if (isset($w['1'], $w['2'], $w['3'], $w['4'], $w['5'])) {
-            $wave1Len = abs($w['2'] - $w['1']);
-            $wave3Len = abs($w['4'] - $w['3']);
-            $wave5Len = abs($w['5'] - $w['4']);
-
-            if ($wave3Len > 0 && $wave1Len > 0 && $wave5Len > 0) {
-                if ($wave3Len < $wave1Len && $wave3Len < $wave5Len) {
-                    $violations[] = [
-                        'rule' => 3,
-                        'description' => 'Wave 3 is the shortest impulse wave',
-                        'severity' => 'critical',
-                        'detail' => sprintf('W1=%.0f, W3=%.0f, W5=%.0f pts', $wave1Len, $wave3Len, $wave5Len),
-                    ];
-                }
-            }
-        }
-
-        // Rule 4: Wave 4 must not overlap Wave 1 price territory
-        if (isset($w['1'], $w['2'], $w['3'], $w['4'])) {
-            if ($w['3'] > $w['1']) { // Bullish impulse
-                if ($w['4'] < $w['1']) {
-                    $violations[] = [
-                        'rule' => 4,
-                        'description' => 'Wave 4 overlaps Wave 1 price territory',
-                        'severity' => 'critical',
-                        'detail' => sprintf('W1=%.2f, W4=%.2f (overlap)', $w['1'], $w['4']),
-                    ];
-                }
-            } else { // Bearish impulse
-                if ($w['4'] > $w['1']) {
-                    $violations[] = [
-                        'rule' => 4,
-                        'description' => 'Wave 4 overlaps Wave 1 price territory',
-                        'severity' => 'critical',
-                        'detail' => sprintf('W1=%.2f, W4=%.2f (overlap)', $w['1'], $w['4']),
-                    ];
-                }
-            }
-        }
-
-        // Rule 2: Wave 2 must not retrace beyond Wave 1 start
-        if (isset($w['1'], $w['2'])) {
-            // For bullish: W2 should not go below W1 origin
-            // We approximate: if W2 retracement is > 100% of W1, it's a violation
-            // This needs the origin price (before W1), which we may not have
-        }
-
-        return $violations;
-    }
-
-    /**
-     * Try different engine parameters to find better wave count.
-     * Tests: swing strengths (3,5,7,10) × with/without different ATR periods.
+     * Test different swing strengths to find the one with fewest violations.
      */
     public function findBestParameters(Symbol $symbol, string $timeframe): array
     {
-        $candles = Candle::where('symbol_id', $symbol->id)
-            ->where('timeframe', $timeframe)
-            ->orderBy('timestamp')
-            ->get()
-            ->toArray();
-
+        $candles = $this->getCandles($symbol->id, $timeframe);
         if (count($candles) < 30) {
-            return ['improved' => false, 'current' => 5, 'best' => 5, 'bestScore' => 0, 'all' => []];
+            return ['improved' => false, 'current' => 5, 'currentScore' => 0, 'best' => 5, 'bestScore' => 0, 'all' => []];
         }
 
-        // Get current score with default params
-        $ewEngine = new ElliottWaveEngine();
-        $ewResult = $ewEngine->run($candles, $symbol->ticker, $timeframe);
-        $currentLabels = $ewResult->overlays['waveLabels'] ?? [];
-        $currentViolations = $this->validateWaveRules($currentLabels);
-        $currentScore = max(0, 100 - count($currentViolations) * 15);
-
-        // Test different swing strengths via MarketStructureEngine
+        $currentStrength = $this->getSwingStrength($symbol->id, $timeframe);
+        $strengths = [3, 4, 5, 6, 7, 8, 10];
         $results = [];
-        $swingStrengths = [3, 4, 5, 6, 7, 8, 10];
 
-        foreach ($swingStrengths as $str) {
+        foreach ($strengths as $str) {
             $msEngine = new MarketStructureEngine($str);
             $msResult = $msEngine->run($candles, $symbol->ticker, $timeframe);
             $swings = $msResult->overlays['swings'] ?? [];
             $bos = $msResult->overlays['bos'] ?? [];
-            $trend = $msResult->metadata['trend'] ?? 'neutral';
 
-            // Derive wave labels from these swings
             $waveLabels = $this->deriveWaveLabelsFromSwings($swings);
             $violations = $this->validateWaveRules($waveLabels);
             $score = max(0, 100 - count($violations) * 15);
 
-            // Trend clarity bonus
+            // Trend bonus
             if (count($bos) > 3) {
                 $recentBos = array_slice($bos, -5);
                 $bullCount = count(array_filter($recentBos, fn ($b) => $b['direction'] === 'buy'));
@@ -285,17 +247,11 @@ class WaveHealthService
                 }
             }
 
-            $results[$str] = [
-                'strength' => $str,
-                'score' => $score,
-                'violations' => count($violations),
-                'swings' => count($swings),
-                'trend' => $trend,
-            ];
+            $results[$str] = ['strength' => $str, 'score' => $score, 'violations' => count($violations), 'swings' => count($swings)];
         }
 
-        // Find best that's actually better than current
-        $best = ['strength' => 5, 'score' => $currentScore];
+        $currentScore = $results[$currentStrength]['score'] ?? 0;
+        $best = $results[$currentStrength] ?? ['strength' => 5, 'score' => 0];
         foreach ($results as $r) {
             if ($r['score'] > $best['score']) {
                 $best = $r;
@@ -304,7 +260,7 @@ class WaveHealthService
 
         return [
             'improved' => $best['score'] > $currentScore,
-            'current' => 5,
+            'current' => $currentStrength,
             'currentScore' => $currentScore,
             'best' => $best['strength'],
             'bestScore' => $best['score'],
@@ -312,16 +268,90 @@ class WaveHealthService
         ];
     }
 
-    /**
-     * Derive wave labels from swing points (used for testing alternate parameters).
-     */
+    public function dashboard(int $symbolId): array
+    {
+        $symbol = Symbol::findOrFail($symbolId);
+        $results = [];
+        foreach (self::TIMEFRAMES as $tf) {
+            $results[] = $this->analyzeTimeframe($symbol, $tf);
+        }
+
+        return $results;
+    }
+
+    // ── Private helpers ──
+
+    private function getCandles(int $symbolId, string $timeframe): array
+    {
+        return Candle::where('symbol_id', $symbolId)
+            ->where('timeframe', $timeframe)
+            ->orderBy('timestamp')
+            ->get()
+            ->toArray();
+    }
+
+    private function emptyResult(string $ticker, string $timeframe): array
+    {
+        return [
+            'symbol' => $ticker, 'timeframe' => $timeframe, 'score' => 0,
+            'status' => 'no_data', 'violations' => [], 'wave_count' => 0,
+            'current_wave' => null, 'phase' => null, 'trend' => 'neutral',
+            'swing_count' => 0, 'bos_count' => 0, 'swing_strength' => 5,
+        ];
+    }
+
+    private function validateWaveRules(array $waveLabels): array
+    {
+        $violations = [];
+        if (count($waveLabels) < 5) {
+            return $violations;
+        }
+
+        $w = [];
+        foreach ($waveLabels as $label) {
+            $w[$label['label']] = (float) $label['price'];
+        }
+
+        // Rule 3: Wave 3 must not be the shortest
+        if (isset($w['1'], $w['2'], $w['3'], $w['4'], $w['5'])) {
+            $w1 = abs($w['2'] - $w['1']);
+            $w3 = abs($w['4'] - $w['3']);
+            $w5 = abs($w['5'] - $w['4']);
+            if ($w3 > 0 && $w1 > 0 && $w5 > 0 && $w3 < $w1 && $w3 < $w5) {
+                $violations[] = [
+                    'rule' => 3,
+                    'description' => 'Wave 3 is the shortest impulse wave',
+                    'severity' => 'critical',
+                    'detail' => sprintf('W1=%.0f, W3=%.0f, W5=%.0f pts', $w1, $w3, $w5),
+                ];
+            }
+        }
+
+        // Rule 4: Wave 4 must not overlap Wave 1
+        if (isset($w['1'], $w['2'], $w['3'], $w['4'])) {
+            $bullish = $w['3'] > $w['1'];
+            if ($bullish && $w['4'] < $w['1']) {
+                $violations[] = [
+                    'rule' => 4, 'description' => 'Wave 4 overlaps Wave 1 territory',
+                    'severity' => 'critical', 'detail' => sprintf('W1=%.2f, W4=%.2f', $w['1'], $w['4']),
+                ];
+            } elseif (! $bullish && $w['4'] > $w['1']) {
+                $violations[] = [
+                    'rule' => 4, 'description' => 'Wave 4 overlaps Wave 1 territory',
+                    'severity' => 'critical', 'detail' => sprintf('W1=%.2f, W4=%.2f', $w['1'], $w['4']),
+                ];
+            }
+        }
+
+        return $violations;
+    }
+
     private function deriveWaveLabelsFromSwings(array $swings): array
     {
         if (count($swings) < 5) {
             return [];
         }
 
-        // Alternate high/low sequence
         $filtered = [$swings[0]];
         for ($i = 1; $i < count($swings); $i++) {
             $last = end($filtered);
@@ -337,67 +367,23 @@ class WaveHealthService
             }
         }
 
-        $waveSeq = ['1', '2', '3', '4', '5', 'A', 'B', 'C'];
+        $seq = ['1', '2', '3', '4', '5', 'A', 'B', 'C'];
         $labels = [];
-        for ($i = 0; $i < min(count($filtered), count($waveSeq)); $i++) {
-            $labels[] = [
-                'label' => $waveSeq[$i % count($waveSeq)],
-                'type' => $filtered[$i]['type'],
-                'price' => $filtered[$i]['price'],
-                'timestamp' => $filtered[$i]['timestamp'] ?? null,
-            ];
+        for ($i = 0; $i < min(count($filtered), count($seq)); $i++) {
+            $labels[] = ['label' => $seq[$i], 'type' => $filtered[$i]['type'], 'price' => $filtered[$i]['price']];
         }
 
         return $labels;
     }
 
-    /**
-     * Auto-fix: attempt to recalibrate and return clear result.
-     */
-    public function autoFix(int $symbolId, string $timeframe): array
-    {
-        $symbol = Symbol::findOrFail($symbolId);
-        $bestAlt = $this->findBestParameters($symbol, $timeframe);
-
-        if (! $bestAlt['improved']) {
-            return [
-                'fixed' => false,
-                'message' => "No better parameters found. Current score ({$bestAlt['currentScore']}) is already the best across swing strengths 3-10.",
-                'suggestion' => 'Try fetching more historical data or checking a different timeframe.',
-                'currentScore' => $bestAlt['currentScore'],
-                'testedParams' => count($bestAlt['all']),
-                'health' => $this->analyzeTimeframe($symbol, $timeframe),
-            ];
-        }
-
-        return [
-            'fixed' => true,
-            'message' => "Improved! Swing {$bestAlt['current']} → {$bestAlt['best']}. Score {$bestAlt['currentScore']} → {$bestAlt['bestScore']}.",
-            'oldSwing' => $bestAlt['current'],
-            'newSwing' => $bestAlt['best'],
-            'oldScore' => $bestAlt['currentScore'],
-            'newScore' => $bestAlt['bestScore'],
-            'testedParams' => count($bestAlt['all']),
-            'health' => $this->analyzeTimeframe($symbol, $timeframe),
-        ];
-    }
-
     public function checkDataIntegrity(int $symbolId, string $timeframe): array
     {
-        $totalCandles = Candle::where('symbol_id', $symbolId)->where('timeframe', $timeframe)->count();
-        $zeroVolume = Candle::where('symbol_id', $symbolId)->where('timeframe', $timeframe)->where('volume', 0)->count();
+        $total = Candle::where('symbol_id', $symbolId)->where('timeframe', $timeframe)->count();
+        $zeroVol = Candle::where('symbol_id', $symbolId)->where('timeframe', $timeframe)->where('volume', 0)->count();
         $gaps = DataGap::where('symbol_id', $symbolId)->where('timeframe', $timeframe)->unfilled()->count();
+        $clean = $zeroVol === 0 && $gaps === 0;
 
-        $isClean = $zeroVolume === 0 && $gaps === 0;
-
-        return [
-            'total_candles' => $totalCandles,
-            'zero_volume' => $zeroVolume,
-            'gaps' => $gaps,
-            'duplicates' => 0,
-            'is_clean' => $isClean,
-            'label' => $isClean ? '✓ Clean' : ($gaps > 0 ? "⚠ {$gaps} gap(s)" : '⚠ Issues'),
-        ];
+        return ['total_candles' => $total, 'zero_volume' => $zeroVol, 'gaps' => $gaps, 'duplicates' => 0, 'is_clean' => $clean, 'label' => $clean ? '✓ Clean' : "⚠ Issues"];
     }
 
     public function checkOverallDataIntegrity(int $symbolId): array
