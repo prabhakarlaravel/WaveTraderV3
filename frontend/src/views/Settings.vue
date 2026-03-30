@@ -20,10 +20,10 @@ const tabs = [
 const exchanges = reactive([
   {
     id: 'binance', name: 'Binance', desc: 'Crypto Spot & Futures', market: 'Crypto',
-    accent: '#F0B90B', logo: '₿',
+    accent: '#F0B90B', logo: '₿', publicApi: true,
     fields: [
-      { key: 'binance_api_key',    label: 'API Key',    type: 'password', encrypted: true },
-      { key: 'binance_api_secret', label: 'API Secret', type: 'password', encrypted: true },
+      { key: 'binance_api_key',    label: 'API Key',    type: 'password', encrypted: true, optional: true },
+      { key: 'binance_api_secret', label: 'API Secret', type: 'password', encrypted: true, optional: true },
     ],
     saving: false, testing: false, status: null,
   },
@@ -111,20 +111,19 @@ onMounted(async () => {
   autoCheckConnections()
 })
 
-// Auto-check connection status for exchanges that have credentials saved
+// Auto-check connection status on page load
 async function autoCheckConnections() {
   for (const ex of exchanges) {
+    // Always test public-API exchanges (Binance uses public endpoints for market data).
+    // For others, only test if credentials are saved.
     const hasCredentials = ex.fields.some(f => {
       const val = exchangeValues[f.key]
       return val && val.length > 0 && val !== f.label
     })
-    if (hasCredentials) {
-      // Test in background — don't block UI
+    if (ex.publicApi || hasCredentials) {
       store.testConnection(ex.id).then(result => {
         ex.status = result
-      }).catch(() => {
-        // Silent fail — stays "Offline"
-      })
+      }).catch(() => { /* stays Offline */ })
     }
   }
 }
@@ -352,7 +351,7 @@ function togglePw(key) { showPw[key] = !showPw[key] }
             <!-- fields -->
             <div class="ex-fields">
               <div v-for="f in ex.fields" :key="f.key" class="field-group">
-                <label class="field-label">{{ f.label }}</label>
+                <label class="field-label">{{ f.label }} <span v-if="f.optional" class="field-opt">optional</span></label>
                 <div class="field-wrap">
                   <select v-if="f.type === 'select'" v-model="exchangeValues[f.key]" class="field-input">
                     <option v-for="opt in f.options" :key="opt" :value="opt">{{ opt }}</option>
@@ -758,6 +757,7 @@ function togglePw(key) { showPw[key] = !showPw[key] }
 .field-group { display: flex; flex-direction: column; gap: 4px; }
 .field-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #475569; }
 .field-unit { font-weight: 500; color: #334155; text-transform: lowercase; letter-spacing: 0; }
+.field-opt { font-weight: 500; color: #334155; text-transform: lowercase; letter-spacing: 0; font-style: italic; }
 .field-wrap { position: relative; display: flex; align-items: center; }
 .field-input {
   width: 100%; padding: 9px 12px; border-radius: 8px; font-size: 13px;
