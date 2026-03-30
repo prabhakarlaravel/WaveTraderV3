@@ -36,10 +36,14 @@ class BootstrapHistoricalCommand extends Command
         $dryRun       = $this->option('dry-run');
 
         // ── Resolve symbols ──────────────────────────────────────────────
+        // Zerodha-supported exchanges only
+        $zerodhaExchanges = ['NSE', 'BSE', 'NFO', 'MCX'];
+
         if ($ticker = $this->option('symbol')) {
             $symbols = Symbol::where('ticker', $ticker)->active()->get();
         } elseif ($exchange === 'all') {
-            $symbols = Symbol::active()->get();
+            // Only Zerodha-supported exchanges (skip Binance/OANDA/Yahoo symbols)
+            $symbols = Symbol::active()->whereIn('exchange', $zerodhaExchanges)->get();
         } else {
             $symbols = Symbol::active()->where('exchange', strtoupper($exchange))->get();
         }
@@ -148,7 +152,7 @@ class BootstrapHistoricalCommand extends Command
 
                 $derived = 0;
                 foreach (['5M', '15M', '1H', '4H', '1D'] as $tf) {
-                    $agg = $aggregation->aggregate($symbol->id, $tf, $from, $to);
+                    $agg = $aggregation->aggregateRange($symbol->id, $tf, $from->copy(), $to->copy());
                     $derived += $agg->count();
                 }
 

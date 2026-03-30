@@ -235,29 +235,37 @@ class ZerodhaDataSource implements DataSourceInterface
         if (! isset($this->instrumentCsvCache[$exchange])) {
             Log::info("Zerodha: downloading {$exchange} instruments list...");
 
-            $response = Http::timeout(60)
+            // Use a temp file + streaming to avoid memory exhaustion on large CSVs (BSE has 100k+ rows)
+            $tempFile = tempnam(sys_get_temp_dir(), 'kite_instruments_');
+
+            $response = Http::timeout(120)
                 ->withHeaders([
                     'X-Kite-Version' => '3',
                     'Authorization' => "token {$apiKey}:{$accessToken}",
                 ])
+                ->sink($tempFile)
                 ->get(self::BASE_URL . '/instruments', ['exchange' => $exchange]);
 
-            if (! $response->successful()) {
-                Log::error("Zerodha: failed to fetch {$exchange} instruments — {$response->status()}");
+            if (! $response->successful() || ! file_exists($tempFile)) {
+                Log::error("Zerodha: failed to fetch {$exchange} instruments — " . ($response->status() ?? 'no file'));
+                @unlink($tempFile);
 
                 return null;
             }
 
-            // Parse entire CSV into a lookup map: tradingsymbol → instrument_token
+            // Stream-parse CSV line by line — only keep tradingsymbol → instrument_token
             $map = [];
-            $lines = explode("\n", $response->body());
-            foreach ($lines as $line) {
-                $cols = str_getcsv($line);
-                // CSV columns: instrument_token, exchange_token, tradingsymbol, name, ...
-                if (isset($cols[2]) && $cols[0] !== 'instrument_token') {
-                    $map[strtoupper($cols[2])] = $cols[0];
+            $handle = fopen($tempFile, 'r');
+            if ($handle) {
+                $header = fgetcsv($handle); // skip header row
+                while (($cols = fgetcsv($handle)) !== false) {
+                    if (isset($cols[2]) && $cols[0] !== '') {
+                        $map[strtoupper($cols[2])] = $cols[0];
+                    }
                 }
+                fclose($handle);
             }
+            @unlink($tempFile);
 
             $this->instrumentCsvCache[$exchange] = $map;
             Log::info("Zerodha: cached " . count($map) . " {$exchange} instruments");

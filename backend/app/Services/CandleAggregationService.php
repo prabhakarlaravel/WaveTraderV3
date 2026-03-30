@@ -99,6 +99,69 @@ class CandleAggregationService
     }
 
     /**
+     * Aggregate ALL 1M candles for a symbol+timeframe within a date range.
+     * Used for historical bootstrap — processes the full range, not just recent window.
+     *
+     * @return Collection of aggregated candle arrays
+     */
+    public function aggregateRange(int $symbolId, string $targetTf, Carbon $from, Carbon $to): Collection
+    {
+        $bucketMinutes = self::AGGREGATION_MAP[$targetTf] ?? null;
+        if (! $bucketMinutes) {
+            return collect();
+        }
+
+        // Process in chunks of 5 days to avoid memory issues
+        $results = collect();
+        $chunkFrom = $from->copy();
+
+        while ($chunkFrom->lt($to)) {
+            $chunkTo = $chunkFrom->copy()->addDays(5);
+            if ($chunkTo->gt($to)) {
+                $chunkTo = $to->copy();
+            }
+
+            $oneMinCandles = Candle::where('symbol_id', $symbolId)
+                ->where('timeframe', '1M')
+                ->where('timestamp', '>=', $chunkFrom)
+                ->where('timestamp', '<=', $chunkTo)
+                ->orderBy('timestamp')
+                ->get();
+
+            if ($oneMinCandles->isNotEmpty()) {
+                $buckets = $oneMinCandles->groupBy(function ($candle) use ($bucketMinutes) {
+                    return $this->getBucketStart(Carbon::parse($candle->timestamp), $bucketMinutes)
+                        ->format('Y-m-d H:i:s');
+                });
+
+                foreach ($buckets as $bucketTs => $candles) {
+                    if ($candles->isEmpty()) {
+                        continue;
+                    }
+
+                    $aggregated = [
+                        'symbol_id' => $symbolId,
+                        'timeframe' => $targetTf,
+                        'timestamp' => $bucketTs,
+                        'open'      => $candles->first()->open,
+                        'high'      => $candles->max('high'),
+                        'low'       => $candles->min('low'),
+                        'close'     => $candles->last()->close,
+                        'volume'    => $candles->sum('volume'),
+                    ];
+
+                    Candle::upsertCandles([$aggregated]);
+                    $results->push($aggregated);
+                }
+            }
+
+            $chunkFrom = $chunkTo->copy()->addSecond();
+        }
+
+        return $results;
+    }
+
+    /**
      * Calculate the bucket start timestamp for a given time and bucket size.
      * e.g., for 5M bucket: 10:07 → 10:05, 14:23 → 14:20
      * e.g., for 4H bucket: 14:23 → 12:00
