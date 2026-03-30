@@ -171,10 +171,9 @@ async function openZerodhaLogin() {
   try {
     const { data } = await axios.get('/api/v1/settings/zerodha/login-url')
     if (data.success) {
-      window.open(data.url, '_blank', 'width=800,height=600')
-      zerodha.tokenMsg     = 'Zerodha login opened in a new window. After authorising, paste the request_token below.'
-      zerodha.tokenMsgType = 'info'
-      showManualTokenInput.value = true
+      // Redirect current tab — Zerodha will call back to /zerodha/callback
+      // which exchanges the token and redirects back here automatically.
+      window.location.href = data.url
     } else {
       zerodha.tokenMsg     = data.message
       zerodha.tokenMsgType = 'error'
@@ -451,10 +450,10 @@ async function saveBackup() {
                 </a>
               </div>
 
-              <!-- Manual request-token input (shown after login window opens) -->
+              <!-- Manual fallback: paste request_token if auto-redirect fails -->
               <div v-if="showManualTokenInput" class="mt-3 flex gap-2">
                 <input v-model="manualRequestToken" type="text"
-                  placeholder="Paste request_token from redirect URL…"
+                  placeholder="Paste request_token from redirect URL (fallback only)…"
                   class="flex-1 rounded-md px-3 py-2 text-xs"
                   style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
                 <button @click="exchangeToken(manualRequestToken)" :disabled="zerodha.tokenExchanging || !manualRequestToken"
