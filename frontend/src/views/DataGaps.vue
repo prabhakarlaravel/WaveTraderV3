@@ -2,9 +2,9 @@
 import { ref, reactive, onMounted, computed, watch } from 'vue'
 import axios from 'axios'
 import SymbolSelector from '../components/shared/SymbolSelector.vue'
+import { useChartStore } from '../stores/useChartStore'
 
-const symbols = ref([])
-const selectedSymbol = ref(null)
+const chartStore = useChartStore()
 const scanResult = ref(null)
 const scanning = ref(false)
 const activeTf = ref('1M')
@@ -12,15 +12,21 @@ const fillingTf = ref('')
 const fillQueue = ref([])       // [ { tf, status, pct, filled, total, elapsed } ]
 const activityLog = ref([])
 
+// Use chartStore as the single source of truth for symbols & selected symbol
+const symbols = computed(() => chartStore.symbols)
+const selectedSymbol = computed({
+  get: () => chartStore.activeSymbolId,
+  set: (v) => {
+    chartStore.activeSymbolId = v
+    try { localStorage.setItem('wt3_active_symbol', String(v)) } catch {}
+  },
+})
+
 const tfOrder = ['1M', '5M', '15M', '1H', '4H', '1D']
 
 onMounted(async () => {
-  const { data } = await axios.get('/api/v1/chart/symbols')
-  symbols.value = data
-  if (data.length) {
-    selectedSymbol.value = data[0].id
-    await smartScan()
-  }
+  if (!chartStore.symbols.length) await chartStore.fetchSymbols()
+  if (chartStore.activeSymbolId) await smartScan()
 })
 
 // ── Activity log ─────────────────────────────────────────────────────────────

@@ -25,6 +25,7 @@ use App\Services\DataSources\DataSourceInterface;
 use App\Services\DataSources\OANDADataSource;
 use App\Services\DataSources\YahooDataSource;
 use App\Services\DataSources\ZerodhaDataSource;
+use App\Jobs\RunEnginesJob;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -88,6 +89,14 @@ class ChartController extends Controller
 
                 Log::debug("fetchLatest: {$symbol->ticker} — {$fetched->count()} 1M candles, " .
                     count($aggregatedCandles) . " TFs aggregated, Redis+Reverb published");
+
+                // Step 7: Dispatch engine run for the requested timeframe (rule #8: queued, never synchronous)
+                try {
+                    RunEnginesJob::dispatch($symbol->id, $timeframe);
+                } catch (\Throwable $je) {
+                    // Queue not available — run engines inline as fallback
+                    Log::debug("Engine job dispatch skipped (queue unavailable): {$je->getMessage()}");
+                }
             }
         } catch (\Throwable $e) {
             Log::warning("fetchLatest failed for {$symbol->ticker}: {$e->getMessage()}");
@@ -140,11 +149,12 @@ class ChartController extends Controller
      */
     private function resolveDataSource(string $exchange): DataSourceInterface
     {
-        return match ($exchange) {
-            'binance' => new BinanceDataSource(),
-            'zerodha' => new ZerodhaDataSource(),
-            'oanda' => new OANDADataSource(),
-            'yahoo' => new YahooDataSource(),
+        $ex = strtoupper($exchange);
+        return match (true) {
+            in_array($ex, ['BINANCE']) => new BinanceDataSource(),
+            in_array($ex, ['ZERODHA', 'NSE', 'BSE', 'NFO', 'MCX']) => new ZerodhaDataSource(),
+            in_array($ex, ['OANDA', 'FOREX']) => new OANDADataSource(),
+            in_array($ex, ['YAHOO']) => new YahooDataSource(),
             default => throw new \RuntimeException("Unsupported exchange: {$exchange}"),
         };
     }

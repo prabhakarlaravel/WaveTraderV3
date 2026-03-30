@@ -25,9 +25,10 @@ const speeds = [0.5, 1, 2, 5, 10, 50]
 const overlayToggles = ref({ waves: true, ob: true, fvg: true, bos: true, vwap: true })
 const rightPanel = ref('trade') // 'trade' | 'matrix' | 'results'
 
-// Config
+// Config — use chartStore's persisted symbol as default
 const selectedSymbol = ref(null)
 const selectedTf = ref('1H')
+// Will be synced from chartStore on mount
 const fromDate = ref('')
 const toDate = ref('')
 
@@ -81,8 +82,9 @@ const symbolName = computed(() => {
 })
 
 onMounted(async () => {
-  await chartStore.fetchSymbols()
-  if (chartStore.symbols.length) selectedSymbol.value = chartStore.symbols[0].id
+  if (!chartStore.symbols.length) await chartStore.fetchSymbols()
+  // Use the globally persisted symbol, or fall back to first
+  selectedSymbol.value = chartStore.activeSymbolId || (chartStore.symbols.length ? chartStore.symbols[0].id : null)
 
   const now = new Date()
   toDate.value = now.toISOString().split('T')[0]

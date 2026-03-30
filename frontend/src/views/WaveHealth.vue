@@ -2,9 +2,17 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import axios from 'axios'
 import SymbolSelector from '../components/shared/SymbolSelector.vue'
+import { useChartStore } from '../stores/useChartStore'
 
-const symbols = ref([])
-const selectedSymbol = ref(null)
+const chartStore = useChartStore()
+const symbols = computed(() => chartStore.symbols)
+const selectedSymbol = computed({
+  get: () => chartStore.activeSymbolId,
+  set: (v) => {
+    chartStore.activeSymbolId = v
+    try { localStorage.setItem('wt3_active_symbol', String(v)) } catch {}
+  },
+})
 const validationResult = ref(null)
 const loading = ref(false)
 const fixingTf = ref('')
@@ -13,12 +21,8 @@ const fixResults = reactive({})
 const activityLog = ref([])
 
 onMounted(async () => {
-  const { data } = await axios.get('/api/v1/chart/symbols')
-  symbols.value = data
-  if (data.length) {
-    selectedSymbol.value = data[0].id
-    await runValidation()
-  }
+  if (!chartStore.symbols.length) await chartStore.fetchSymbols()
+  if (chartStore.activeSymbolId) await runValidation()
 })
 
 function addLog(msg, color = '#34d399') {
