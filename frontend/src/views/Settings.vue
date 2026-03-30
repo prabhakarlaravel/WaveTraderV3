@@ -233,16 +233,37 @@ async function fetchZerodhaBalance() {
   }
 }
 
-// Auto-exchange token if Zerodha redirected back with request_token in URL
+// Handle Zerodha OAuth callback result.
+// New flow: Laravel /zerodha/callback exchanges token server-side then
+//   redirects to frontend/settings?zerodha_status=success&user_name=...
+// Fallback: request_token still in URL (shouldn't happen with callback URL configured)
 function checkZerodhaRedirect() {
-  const params = new URLSearchParams(window.location.search)
-  const rt     = params.get('request_token')
-  const status = params.get('status')
-  if (rt && status === 'success') {
+  const params        = new URLSearchParams(window.location.search)
+  const zerodhaStatus = params.get('zerodha_status')   // 'success' | 'error'
+  const message       = params.get('message')
+  const userName      = params.get('user_name')
+  const rt            = params.get('request_token')
+  const status        = params.get('status')
+
+  // Clean Zerodha params from URL without page reload
+  if (zerodhaStatus || rt) {
+    window.history.replaceState({}, '', window.location.pathname)
+  }
+
+  if (zerodhaStatus === 'success') {
+    // Backend already exchanged the token — show success and load balance
+    activeTab.value      = 'exchange'
+    zerodha.userName     = userName || ''
+    zerodha.tokenMsg     = `✓ Token generated successfully${userName ? ' for ' + userName : ''}. Session is active.`
+    zerodha.tokenMsgType = 'success'
+    fetchZerodhaBalance()
+  } else if (zerodhaStatus === 'error') {
+    activeTab.value      = 'exchange'
+    zerodha.tokenMsg     = message || 'Token generation failed'
+    zerodha.tokenMsgType = 'error'
+  } else if (rt && status === 'success') {
+    // Safety net: frontend received request_token directly
     activeTab.value = 'exchange'
-    // Remove params from URL without reload
-    const clean = window.location.pathname
-    window.history.replaceState({}, '', clean)
     exchangeToken(rt)
   }
 }

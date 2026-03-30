@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Setting;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -167,6 +168,66 @@ class SettingsController extends Controller
         }
 
         return response()->json(['success' => false, 'has_token' => true, 'message' => 'Balance fetch failed: '.$response->status()]);
+    }
+
+    /**
+     * Browser-facing OAuth callback — Zerodha redirects here after login.
+     * Configured redirect URL in Kite developer console: http://localhost:8000/zerodha/callback
+     *
+     * URL format:  /zerodha/callback?action=login&type=login&status=success&request_token=xxx
+     */
+    public function zerodhaCallback(Request $request): RedirectResponse
+    {
+        $frontendUrl  = rtrim(env('FRONTEND_URL', 'http://localhost:5173'), '/');
+        $settingsPage = "{$frontendUrl}/settings";
+
+        $status       = $request->query('status');
+        $requestToken = $request->query('request_token');
+
+        if ($status !== 'success' || ! $requestToken) {
+            $msg = urlencode('Zerodha login was cancelled or failed. Please try again.');
+
+            return redirect("{$settingsPage}?zerodha_status=error&message={$msg}");
+        }
+
+        $apiKey    = Setting::get('zerodha_api_key');
+        $apiSecret = Setting::get('zerodha_api_secret');
+
+        if (! $apiKey || ! $apiSecret) {
+            $msg = urlencode('Save API Key and Secret before generating a token.');
+
+            return redirect("{$settingsPage}?zerodha_status=error&message={$msg}");
+        }
+
+        // KiteConnect checksum = SHA-256(api_key + request_token + api_secret)
+        $checksum = hash('sha256', $apiKey.$requestToken.$apiSecret);
+
+        $response = Http::timeout(15)
+            ->asForm()
+            ->withHeaders(['X-Kite-Version' => '3'])
+            ->post('https://api.kite.trade/session/token', [
+                'api_key'       => $apiKey,
+                'request_token' => $requestToken,
+                'checksum'      => $checksum,
+            ]);
+
+        if ($response->successful()) {
+            $accessToken = $response->json('data.access_token');
+            $userName    = $response->json('data.user_name', '');
+
+            if ($accessToken) {
+                Setting::set('zerodha_access_token', $accessToken, 'exchange', true);
+                Log::info('Zerodha access token refreshed', ['user' => $userName]);
+
+                $nameEnc = urlencode($userName);
+
+                return redirect("{$settingsPage}?zerodha_status=success&user_name={$nameEnc}");
+            }
+        }
+
+        $errMsg = urlencode($response->json('message') ?? 'Token exchange failed ('.$response->status().')');
+
+        return redirect("{$settingsPage}?zerodha_status=error&message={$errMsg}");
     }
 
     // ── Private test helpers ─────────────────────────────────────────────────
