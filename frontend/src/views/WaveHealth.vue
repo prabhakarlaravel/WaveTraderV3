@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, onMounted, computed } from 'vue'
 import axios from 'axios'
+import SymbolSelector from '../components/shared/SymbolSelector.vue'
 
 const symbols = ref([])
 const selectedSymbol = ref(null)
@@ -112,11 +113,12 @@ const allViolations = computed(() => {
         <p class="mt-1 text-xs" style="color: var(--muted)">Elliott Wave validation, auto-fix, and wave regeneration</p>
       </div>
       <div class="flex items-center gap-2">
-        <select v-model="selectedSymbol" @change="runValidation()"
-          class="rounded-md px-3 py-1.5 text-xs"
-          style="background: var(--card); border: 1px solid var(--border); color: var(--text)">
-          <option v-for="s in symbols" :key="s.id" :value="s.id">{{ s.ticker }}</option>
-        </select>
+        <SymbolSelector
+          :symbols="symbols"
+          v-model="selectedSymbol"
+          @change="runValidation()"
+          compact
+        />
         <button @click="runValidation" :disabled="loading"
           class="rounded-md px-3 py-1.5 text-[11px] font-bold"
           :style="{ background: loading ? '#1e40af' : '#2563eb', color: '#fff' }">

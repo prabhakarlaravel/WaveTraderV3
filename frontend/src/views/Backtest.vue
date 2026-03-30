@@ -7,6 +7,7 @@ import { useChartOverlays } from '../composables/useChartOverlays'
 import { useDrawingTools } from '../composables/useDrawingTools'
 import { useDrawingStore } from '../stores/useDrawingStore'
 import DrawingToolbar from '../components/chart/DrawingToolbar.vue'
+import SymbolSelector from '../components/shared/SymbolSelector.vue'
 import axios from 'axios'
 
 const chartStore = useChartStore()
@@ -215,11 +216,11 @@ watch(() => rightPanel.value, (v) => {
   <div class="backtest-page">
     <!-- Toolbar Row 1: Symbol + Timeframe + Overlays -->
     <div class="toolbar">
-      <div class="sym-group">
-        <button v-for="s in chartStore.symbols" :key="s.id"
-          :class="['sym-btn', { active: s.id === selectedSymbol }]"
-          @click="selectedSymbol = s.id">{{ s.ticker }}</button>
-      </div>
+      <SymbolSelector
+        :symbols="chartStore.symbols"
+        v-model="selectedSymbol"
+        compact
+      />
 
       <div class="toolbar-sep"></div>
 

@@ -7,6 +7,7 @@ import { useChartOverlays } from '../composables/useChartOverlays'
 import { useDrawingTools } from '../composables/useDrawingTools'
 import { useDrawingStore } from '../stores/useDrawingStore'
 import DrawingToolbar from '../components/chart/DrawingToolbar.vue'
+import SymbolSelector from '../components/shared/SymbolSelector.vue'
 import SignalFeed from '../components/panels/SignalFeed.vue'
 import TradePanel from '../components/panels/TradePanel.vue'
 import WaveMatrixPanel from '../components/panels/WaveMatrixPanel.vue'
@@ -224,11 +225,12 @@ watch(() => drawingStore.currentDrawings, () => renderAll(), { deep: true })
     <!-- Chart toolbar -->
     <div class="chart-toolbar">
       <!-- Symbol selector -->
-      <div class="tf-group">
-        <button v-for="s in chartStore.symbols" :key="s.id" @click="chartStore.setSymbol(s.id)"
-          :class="['tf-btn', { active: chartStore.activeSymbolId === s.id }]"
-          style="font-size: 11px; font-weight: 700">{{ s.ticker }}</button>
-      </div>
+      <SymbolSelector
+        :symbols="chartStore.symbols"
+        :model-value="chartStore.activeSymbolId"
+        @update:model-value="chartStore.setSymbol($event)"
+        compact
+      />
 
       <div class="toolbar-sep"></div>
 

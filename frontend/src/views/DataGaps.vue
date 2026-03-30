@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, onMounted, computed } from 'vue'
 import axios from 'axios'
+import SymbolSelector from '../components/shared/SymbolSelector.vue'
 
 const symbols = ref([])
 const selectedSymbol = ref(null)
@@ -142,11 +143,12 @@ function gapStatus(tf) {
         <p class="mt-1 text-xs" style="color: var(--muted)">Visual gap detection — see exactly where data is missing</p>
       </div>
       <div class="flex items-center gap-2">
-        <select v-model="selectedSymbol" @change="smartScan()"
-          class="rounded-md px-3 py-1.5 text-xs"
-          style="background: var(--card); border: 1px solid var(--border); color: var(--text)">
-          <option v-for="s in symbols" :key="s.id" :value="s.id">{{ s.ticker }}</option>
-        </select>
+        <SymbolSelector
+          :symbols="symbols"
+          v-model="selectedSymbol"
+          @change="smartScan()"
+          compact
+        />
         <button @click="smartScan" :disabled="scanning"
           class="rounded-md px-3 py-1.5 text-[11px] font-bold"
           style="background: #2563eb; color: #fff">
