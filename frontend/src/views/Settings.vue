@@ -5,21 +5,22 @@ import { useSettingsStore } from '../stores/useSettingsStore'
 import SymbolManager from '../components/settings/SymbolManager.vue'
 import axios from 'axios'
 
-const store    = useSettingsStore()
-const route    = useRoute()
+const store     = useSettingsStore()
+const route     = useRoute()
 const activeTab = ref('exchange')
+
 const tabs = [
-  { id: 'exchange', label: 'Exchange' },
-  { id: 'engine',   label: 'Engines' },
-  { id: 'system',   label: 'System' },
-  { id: 'backup',   label: 'Backup' },
+  { id: 'exchange', label: 'Exchanges',  icon: '⇋', desc: 'API connections' },
+  { id: 'engine',   label: 'Engines',    icon: '⚙', desc: 'Analysis modules' },
+  { id: 'system',   label: 'System',     icon: '◎', desc: 'Pipeline & symbols' },
+  { id: 'backup',   label: 'Backup',     icon: '⛁', desc: 'Storage & recovery' },
 ]
 
 // ── Exchange state ──────────────────────────────────────────────────────────
-// Zerodha has no access-token field here — it is generated via KiteConnect OAuth.
 const exchanges = reactive([
   {
-    id: 'binance', name: 'Binance', desc: 'Crypto — REST API v3',
+    id: 'binance', name: 'Binance', desc: 'Crypto Spot & Futures', market: 'Crypto',
+    accent: '#F0B90B', logo: '₿',
     fields: [
       { key: 'binance_api_key',    label: 'API Key',    type: 'password', encrypted: true },
       { key: 'binance_api_secret', label: 'API Secret', type: 'password', encrypted: true },
@@ -27,7 +28,8 @@ const exchanges = reactive([
     saving: false, testing: false, status: null,
   },
   {
-    id: 'zerodha', name: 'Zerodha', desc: 'NSE/BSE — KiteConnect v3',
+    id: 'zerodha', name: 'Zerodha', desc: 'NSE · BSE · MCX — KiteConnect v3', market: 'India',
+    accent: '#387ED1', logo: 'Z',
     fields: [
       { key: 'zerodha_api_key',    label: 'API Key',    type: 'password', encrypted: true },
       { key: 'zerodha_api_secret', label: 'API Secret', type: 'password', encrypted: true },
@@ -35,73 +37,70 @@ const exchanges = reactive([
     saving: false, testing: false, status: null,
   },
   {
-    id: 'oanda', name: 'OANDA', desc: 'Forex — REST v20',
+    id: 'oanda', name: 'OANDA', desc: 'Forex — 50+ currency pairs', market: 'Forex',
+    accent: '#2FB87E', logo: 'Ø',
     fields: [
-      { key: 'oanda_account_id',    label: 'Account ID',    type: 'text',     encrypted: false },
-      { key: 'oanda_bearer_token',  label: 'Bearer Token',  type: 'password', encrypted: true  },
-      { key: 'oanda_mode',          label: 'Mode',          type: 'select',   options: ['practice', 'live'], encrypted: false },
+      { key: 'oanda_account_id',   label: 'Account ID',   type: 'text',     encrypted: false },
+      { key: 'oanda_bearer_token', label: 'Bearer Token',  type: 'password', encrypted: true  },
+      { key: 'oanda_mode',         label: 'Mode',          type: 'select',   options: ['practice', 'live'], encrypted: false },
     ],
     saving: false, testing: false, status: null,
   },
 ])
 const exchangeValues = reactive({})
+const showPw = reactive({}) // per-field show/hide password
 
 // ── Zerodha-specific state ──────────────────────────────────────────────────
 const zerodha = reactive({
-  tokenLoading:    false,
-  tokenExchanging: false,
-  balanceLoading:  false,
-  hasToken:        false,
-  expired:         false,
-  userName:        '',
-  equity:          null,
-  commodity:       null,
-  tokenMsg:        '',
-  tokenMsgType:    'success', // 'success' | 'error'
+  tokenLoading: false, tokenExchanging: false, balanceLoading: false,
+  hasToken: false, expired: false, userName: '',
+  equity: null, commodity: null, tokenMsg: '', tokenMsgType: 'success',
 })
 
 // ── Engine state ────────────────────────────────────────────────────────────
+const engineMeta = {
+  elliott_wave:     { icon: '〰', color: '#818cf8', desc: 'Wave labeling · Fibonacci targets · HTF derivation' },
+  market_structure: { icon: '⧫', color: '#38bdf8', desc: 'BOS / CHOCH · Swing detection · Trend alignment' },
+  order_block:      { icon: '▬', color: '#f472b6', desc: 'Bullish / Bearish OBs · Mitigation tracking' },
+  fvg:              { icon: '▤', color: '#22d3ee', desc: '3-candle imbalance · Fill tracking · Inverse FVG' },
+  smc:              { icon: '◈', color: '#a78bfa', desc: 'Premium / Discount · Liquidity pools · OTE zone' },
+  vwap:             { icon: '≋', color: '#fbbf24', desc: 'Multi-session VWAP · Sigma bands · Anchored' },
+  price_action:     { icon: '⌇', color: '#f87171', desc: 'Candlestick patterns · S/R · Supply / Demand' },
+}
 const engines = reactive([
-  { key: 'elliott_wave',    name: 'Elliott Wave',    enabled: true, params: [] },
-  { key: 'market_structure', name: 'Market Structure', enabled: true, params: [
+  { key: 'elliott_wave',     name: 'Elliott Wave',     enabled: true, params: [] },
+  { key: 'market_structure', name: 'Market Structure',  enabled: true, params: [
       { key: 'ms_lookback', label: 'Swing Lookback', type: 'number', default: 5 },
   ]},
   { key: 'order_block', name: 'Order Block', enabled: true, params: [
-      { key: 'ob_atr_period',   label: 'ATR Period',          type: 'number', default: 14  },
-      { key: 'ob_impulse_mult', label: 'Impulse Multiplier',  type: 'number', default: 1.5 },
+      { key: 'ob_atr_period',   label: 'ATR Period',         type: 'number', default: 14  },
+      { key: 'ob_impulse_mult', label: 'Impulse Multiplier', type: 'number', default: 1.5 },
   ]},
   { key: 'fvg',          name: 'FVG',          enabled: true, params: [] },
   { key: 'smc',          name: 'SMC',          enabled: true, params: [] },
   { key: 'vwap',         name: 'VWAP',         enabled: true, params: [] },
   { key: 'price_action', name: 'Price Action', enabled: true, params: [] },
 ])
-const engineValues  = reactive({})
+const engineValues   = reactive({})
 const expandedEngine = ref(null)
 const engineSaving   = ref(false)
 
 // ── System state ────────────────────────────────────────────────────────────
 const systemValues = reactive({
-  fetch_interval:   '30',
-  historical_depth: '3',
-  telegram_webhook: '',
-  horizon_workers:  '3',
+  fetch_interval: '30', historical_depth: '3', telegram_webhook: '', horizon_workers: '3',
 })
 const systemSaving = ref(false)
 
 // ── Backup state ────────────────────────────────────────────────────────────
 const backupValues = reactive({
-  local_enabled:        false,
-  local_retention_days: '7',
-  r2_account_id:        '',
-  r2_access_key:        '',
-  r2_secret_key:        '',
-  r2_bucket:            '',
-  scope_candles:  true,
-  scope_waves:    true,
-  scope_settings: true,
-  scope_trades:   true,
+  local_enabled: false, local_retention_days: '7',
+  r2_account_id: '', r2_access_key: '', r2_secret_key: '', r2_bucket: '',
+  scope_candles: true, scope_waves: true, scope_settings: true, scope_trades: true,
 })
 const backupSaving = ref(false)
+
+const showManualTokenInput = ref(false)
+const manualRequestToken   = ref('')
 
 // ────────────────────────────────────────────────────────────────────────────
 onMounted(async () => {
@@ -119,557 +118,703 @@ function loadValues() {
   }
   for (const eng of engines) {
     eng.enabled = store.get(`engine_${eng.key}_enabled`, 'true') !== 'false'
-    for (const p of eng.params) {
-      engineValues[p.key] = store.get(p.key, String(p.default))
-    }
+    for (const p of eng.params) engineValues[p.key] = store.get(p.key, String(p.default))
   }
   systemValues.fetch_interval   = store.get('fetch_interval',   '30')
   systemValues.historical_depth = store.get('historical_depth', '3')
   systemValues.telegram_webhook = store.get('telegram_webhook', '')
   systemValues.horizon_workers  = store.get('horizon_workers',  '3')
-  backupValues.local_enabled          = store.get('backup_local_enabled', 'false') === 'true'
-  backupValues.local_retention_days   = store.get('backup_local_retention_days', '7')
-  backupValues.r2_account_id          = store.get('r2_account_id', '')
-  backupValues.r2_access_key          = store.get('r2_access_key', '')
-  backupValues.r2_secret_key          = store.get('r2_secret_key', '')
-  backupValues.r2_bucket              = store.get('r2_bucket', '')
+  backupValues.local_enabled        = store.get('backup_local_enabled', 'false') === 'true'
+  backupValues.local_retention_days = store.get('backup_local_retention_days', '7')
+  backupValues.r2_account_id  = store.get('r2_account_id', '')
+  backupValues.r2_access_key  = store.get('r2_access_key', '')
+  backupValues.r2_secret_key  = store.get('r2_secret_key', '')
+  backupValues.r2_bucket      = store.get('r2_bucket', '')
 }
 
-// ── Exchange save / test ─────────────────────────────────────────────────────
+// ── Exchange save / test ─────────────────────────────────────────────────
 async function saveExchange(ex) {
   ex.saving = true
   try {
     const settings = ex.fields.map(f => ({
-      key:       f.key,
-      value:     exchangeValues[f.key] || '',
-      group:     'exchange',
-      encrypted: f.encrypted,
+      key: f.key, value: exchangeValues[f.key] || '', group: 'exchange', encrypted: f.encrypted,
     }))
     await axios.put('/api/v1/settings', { settings })
     store.showToast(`${ex.name} settings saved`, 'success')
-    await store.fetchAll()
-    loadValues()
+    await store.fetchAll(); loadValues()
   } catch (e) {
     store.showToast(e.response?.data?.message || 'Failed to save', 'error')
-  } finally {
-    ex.saving = false
-  }
+  } finally { ex.saving = false }
 }
 
 async function testExchange(ex) {
-  ex.testing = true
-  ex.status  = null
-  const result = await store.testConnection(ex.id)
-  ex.status  = result
+  ex.testing = true; ex.status = null
+  ex.status = await store.testConnection(ex.id)
   ex.testing = false
 }
 
-// ── Zerodha token flow ───────────────────────────────────────────────────────
+// ── Zerodha token flow ──────────────────────────────────────────────────
 async function openZerodhaLogin() {
-  zerodha.tokenLoading = true
-  zerodha.tokenMsg     = ''
+  zerodha.tokenLoading = true; zerodha.tokenMsg = ''
   try {
     const { data } = await axios.get('/api/v1/settings/zerodha/login-url')
-    if (data.success) {
-      // Redirect current tab — Zerodha will call back to /zerodha/callback
-      // which exchanges the token and redirects back here automatically.
-      window.location.href = data.url
-    } else {
-      zerodha.tokenMsg     = data.message
-      zerodha.tokenMsgType = 'error'
-    }
+    if (data.success) { window.location.href = data.url }
+    else { zerodha.tokenMsg = data.message; zerodha.tokenMsgType = 'error' }
   } catch (e) {
-    zerodha.tokenMsg     = e.response?.data?.message || 'Failed to get login URL'
+    zerodha.tokenMsg = e.response?.data?.message || 'Failed to get login URL'
     zerodha.tokenMsgType = 'error'
-  } finally {
-    zerodha.tokenLoading = false
-  }
+  } finally { zerodha.tokenLoading = false }
 }
-
-const showManualTokenInput = ref(false)
-const manualRequestToken   = ref('')
 
 async function exchangeToken(requestToken) {
   if (!requestToken) return
-  zerodha.tokenExchanging = true
-  zerodha.tokenMsg        = ''
+  zerodha.tokenExchanging = true; zerodha.tokenMsg = ''
   try {
-    const { data } = await axios.post('/api/v1/settings/zerodha/exchange-token', {
-      request_token: requestToken,
-    })
-    zerodha.tokenMsg     = data.message
-    zerodha.tokenMsgType = data.success ? 'success' : 'error'
+    const { data } = await axios.post('/api/v1/settings/zerodha/exchange-token', { request_token: requestToken })
+    zerodha.tokenMsg = data.message; zerodha.tokenMsgType = data.success ? 'success' : 'error'
     if (data.success) {
-      zerodha.userName         = data.user_name || ''
-      showManualTokenInput.value = false
-      manualRequestToken.value   = ''
+      zerodha.userName = data.user_name || ''
+      showManualTokenInput.value = false; manualRequestToken.value = ''
       await fetchZerodhaBalance()
     }
   } catch (e) {
-    zerodha.tokenMsg     = e.response?.data?.message || 'Token exchange failed'
-    zerodha.tokenMsgType = 'error'
-  } finally {
-    zerodha.tokenExchanging = false
-  }
+    zerodha.tokenMsg = e.response?.data?.message || 'Token exchange failed'; zerodha.tokenMsgType = 'error'
+  } finally { zerodha.tokenExchanging = false }
 }
 
 async function fetchZerodhaBalance() {
   zerodha.balanceLoading = true
   try {
     const { data } = await axios.get('/api/v1/settings/zerodha/balance')
-    zerodha.hasToken   = data.has_token   ?? false
-    zerodha.expired    = data.expired     ?? false
-    zerodha.equity     = data.equity      ?? null
-    zerodha.commodity  = data.commodity   ?? null
-    if (data.expired) {
-      zerodha.tokenMsg     = 'Session expired. Please regenerate the token.'
-      zerodha.tokenMsgType = 'error'
-    }
-  } catch {
-    zerodha.hasToken = false
-  } finally {
-    zerodha.balanceLoading = false
-  }
+    zerodha.hasToken = data.has_token ?? false; zerodha.expired = data.expired ?? false
+    zerodha.equity = data.equity ?? null; zerodha.commodity = data.commodity ?? null
+    if (data.expired) { zerodha.tokenMsg = 'Session expired — regenerate token.'; zerodha.tokenMsgType = 'error' }
+  } catch { zerodha.hasToken = false }
+  finally { zerodha.balanceLoading = false }
 }
 
-// Handle Zerodha OAuth callback result.
-// New flow: Laravel /zerodha/callback exchanges token server-side then
-//   redirects to frontend/settings?zerodha_status=success&user_name=...
-// Fallback: request_token still in URL (shouldn't happen with callback URL configured)
 function checkZerodhaRedirect() {
-  const params        = new URLSearchParams(window.location.search)
-  const zerodhaStatus = params.get('zerodha_status')   // 'success' | 'error'
-  const message       = params.get('message')
-  const userName      = params.get('user_name')
-  const rt            = params.get('request_token')
-  const status        = params.get('status')
-
-  // Clean Zerodha params from URL without page reload
-  if (zerodhaStatus || rt) {
-    window.history.replaceState({}, '', window.location.pathname)
-  }
-
+  const params = new URLSearchParams(window.location.search)
+  const zerodhaStatus = params.get('zerodha_status'), message = params.get('message')
+  const userName = params.get('user_name'), rt = params.get('request_token'), status = params.get('status')
+  if (zerodhaStatus || rt) window.history.replaceState({}, '', window.location.pathname)
   if (zerodhaStatus === 'success') {
-    // Backend already exchanged the token — show success and load balance
-    activeTab.value      = 'exchange'
-    zerodha.userName     = userName || ''
-    zerodha.tokenMsg     = `✓ Token generated successfully${userName ? ' for ' + userName : ''}. Session is active.`
-    zerodha.tokenMsgType = 'success'
-    fetchZerodhaBalance()
+    activeTab.value = 'exchange'; zerodha.userName = userName || ''
+    zerodha.tokenMsg = `Token generated${userName ? ' for ' + userName : ''}. Session active.`
+    zerodha.tokenMsgType = 'success'; fetchZerodhaBalance()
   } else if (zerodhaStatus === 'error') {
-    activeTab.value      = 'exchange'
-    zerodha.tokenMsg     = message || 'Token generation failed'
-    zerodha.tokenMsgType = 'error'
-  } else if (rt && status === 'success') {
-    // Safety net: frontend received request_token directly
-    activeTab.value = 'exchange'
-    exchangeToken(rt)
-  }
+    activeTab.value = 'exchange'; zerodha.tokenMsg = message || 'Token generation failed'; zerodha.tokenMsgType = 'error'
+  } else if (rt && status === 'success') { activeTab.value = 'exchange'; exchangeToken(rt) }
 }
 
-// Zerodha add-funds URL (Kite web)
 const zerodhaFundsUrl = 'https://zerodha.com/portfolio/add-funds'
 
-// ── Engine save ──────────────────────────────────────────────────────────────
+// ── Engine / System / Backup save ─────────────────────────────────────────
 async function saveEngines() {
   engineSaving.value = true
   try {
-    const settings = []
-    for (const eng of engines) {
-      settings.push({ key: `engine_${eng.key}_enabled`, value: String(eng.enabled), group: 'engine', encrypted: false })
-      for (const p of eng.params) {
-        settings.push({ key: p.key, value: engineValues[p.key] || String(p.default), group: 'engine', encrypted: false })
-      }
+    const s = []; for (const eng of engines) {
+      s.push({ key: `engine_${eng.key}_enabled`, value: String(eng.enabled), group: 'engine', encrypted: false })
+      for (const p of eng.params) s.push({ key: p.key, value: engineValues[p.key] || String(p.default), group: 'engine', encrypted: false })
     }
-    await axios.put('/api/v1/settings', { settings })
-    store.showToast('Engine settings saved', 'success')
-    await store.fetchAll()
-  } catch (e) {
-    store.showToast(e.response?.data?.message || 'Failed to save', 'error')
-  } finally {
-    engineSaving.value = false
-  }
+    await axios.put('/api/v1/settings', { settings: s }); store.showToast('Engine settings saved', 'success'); await store.fetchAll()
+  } catch (e) { store.showToast(e.response?.data?.message || 'Failed', 'error') }
+  finally { engineSaving.value = false }
 }
 
-// ── System save ───────────────────────────────────────────────────────────────
 async function saveSystem() {
   systemSaving.value = true
   try {
     await axios.put('/api/v1/settings', { settings: [
-      { key: 'fetch_interval',   value: systemValues.fetch_interval,   group: 'system' },
+      { key: 'fetch_interval', value: systemValues.fetch_interval, group: 'system' },
       { key: 'historical_depth', value: systemValues.historical_depth, group: 'system' },
       { key: 'telegram_webhook', value: systemValues.telegram_webhook, group: 'system' },
-      { key: 'horizon_workers',  value: systemValues.horizon_workers,  group: 'system' },
-    ]})
-    store.showToast('System settings saved', 'success')
-    await store.fetchAll()
-  } catch (e) {
-    store.showToast(e.response?.data?.message || 'Failed to save', 'error')
-  } finally {
-    systemSaving.value = false
-  }
+      { key: 'horizon_workers', value: systemValues.horizon_workers, group: 'system' },
+    ]}); store.showToast('System settings saved', 'success'); await store.fetchAll()
+  } catch (e) { store.showToast(e.response?.data?.message || 'Failed', 'error') }
+  finally { systemSaving.value = false }
 }
 
-// ── Backup save ───────────────────────────────────────────────────────────────
 async function saveBackup() {
   backupSaving.value = true
   try {
     await axios.put('/api/v1/settings', { settings: [
-      { key: 'backup_local_enabled',        value: String(backupValues.local_enabled),        group: 'backup' },
-      { key: 'backup_local_retention_days', value: backupValues.local_retention_days,          group: 'backup' },
-      { key: 'r2_account_id',               value: backupValues.r2_account_id,                 group: 'backup', encrypted: false },
-      { key: 'r2_access_key',               value: backupValues.r2_access_key,                 group: 'backup', encrypted: true  },
-      { key: 'r2_secret_key',               value: backupValues.r2_secret_key,                 group: 'backup', encrypted: true  },
-      { key: 'r2_bucket',                   value: backupValues.r2_bucket,                     group: 'backup', encrypted: false },
-    ]})
-    store.showToast('Backup settings saved', 'success')
-    await store.fetchAll()
-  } catch (e) {
-    store.showToast(e.response?.data?.message || 'Failed to save', 'error')
-  } finally {
-    backupSaving.value = false
-  }
+      { key: 'backup_local_enabled', value: String(backupValues.local_enabled), group: 'backup' },
+      { key: 'backup_local_retention_days', value: backupValues.local_retention_days, group: 'backup' },
+      { key: 'r2_account_id', value: backupValues.r2_account_id, group: 'backup', encrypted: false },
+      { key: 'r2_access_key', value: backupValues.r2_access_key, group: 'backup', encrypted: true },
+      { key: 'r2_secret_key', value: backupValues.r2_secret_key, group: 'backup', encrypted: true },
+      { key: 'r2_bucket', value: backupValues.r2_bucket, group: 'backup', encrypted: false },
+    ]}); store.showToast('Backup settings saved', 'success'); await store.fetchAll()
+  } catch (e) { store.showToast(e.response?.data?.message || 'Failed', 'error') }
+  finally { backupSaving.value = false }
 }
+
+function togglePw(key) { showPw[key] = !showPw[key] }
 </script>
 
 <template>
-  <div class="p-4 max-w-4xl mx-auto">
+  <div class="settings-root">
 
-    <!-- Toast -->
+    <!-- ══════════════════════ TOAST ══════════════════════ -->
     <Teleport to="body">
-      <div v-if="store.toast"
-        class="fixed top-4 right-4 z-50 rounded-lg px-4 py-3 text-sm font-semibold shadow-lg transition-all"
-        :style="store.toast.type === 'success'
-          ? 'background: rgba(0,220,130,0.15); border: 1px solid rgba(0,220,130,0.4); color: var(--bull)'
-          : 'background: rgba(255,59,92,0.15);  border: 1px solid rgba(255,59,92,0.4);  color: var(--bear)'">
-        {{ store.toast.message }}
-      </div>
+      <transition name="toast">
+        <div v-if="store.toast" class="toast-bar"
+          :class="store.toast.type === 'success' ? 'toast-ok' : 'toast-err'">
+          <span class="toast-dot" :class="store.toast.type === 'success' ? 'dot-ok' : 'dot-err'" />
+          {{ store.toast.message }}
+        </div>
+      </transition>
     </Teleport>
 
-    <h1 class="text-2xl font-bold" style="color: var(--text)">Settings</h1>
-    <p class="mt-1 text-sm" style="color: var(--muted)">Configure exchange connections, engine parameters, backups, and system preferences.</p>
-
-    <!-- Tabs -->
-    <div class="mt-6 flex gap-1" style="border-bottom: 1px solid var(--border)">
-      <button v-for="tab in tabs" :key="tab.id" @click="activeTab = tab.id"
-        class="px-4 py-2.5 text-sm font-medium transition"
-        :style="activeTab === tab.id
-          ? 'border-bottom: 2px solid var(--accent); color: var(--text)'
-          : 'color: var(--dim)'">
-        {{ tab.label }}
-      </button>
-    </div>
-
-    <div class="mt-6">
-
-      <!-- ══════ EXCHANGE TAB ══════ -->
-      <div v-if="activeTab === 'exchange'" class="space-y-4">
-        <div v-for="ex in exchanges" :key="ex.id" class="rounded-xl p-5"
-          style="background: var(--card); border: 1px solid var(--border)">
-
-          <!-- Card header -->
-          <div class="flex items-center justify-between mb-4">
-            <div>
-              <h3 class="font-semibold" style="color: var(--text)">{{ ex.name }}</h3>
-              <p class="text-xs" style="color: var(--dim)">{{ ex.desc }}</p>
-            </div>
-            <span v-if="ex.status" class="rounded-full px-2.5 py-1 text-xs font-semibold"
-              :style="ex.status.success
-                ? 'background: rgba(0,220,130,0.1); color: var(--bull)'
-                : 'background: rgba(255,59,92,0.1); color: var(--bear)'">
-              {{ ex.status.success ? '● Connected' : '● Failed' }}
-            </span>
-            <span v-else class="rounded-full px-2.5 py-1 text-xs" style="background: var(--surface); color: var(--dim)">
-              ○ Not Connected
-            </span>
-          </div>
-
-          <!-- API key / secret fields (all exchanges) -->
-          <div class="grid gap-3 md:grid-cols-2">
-            <div v-for="f in ex.fields" :key="f.key">
-              <label class="block text-[10px] mb-1 uppercase tracking-wider" style="color: var(--dim)">{{ f.label }}</label>
-              <select v-if="f.type === 'select'" v-model="exchangeValues[f.key]"
-                class="w-full rounded-md px-3 py-2 text-sm"
-                style="background: var(--surface); border: 1px solid var(--border); color: var(--text)">
-                <option v-for="opt in f.options" :key="opt" :value="opt">{{ opt }}</option>
-              </select>
-              <input v-else v-model="exchangeValues[f.key]" :type="f.type" :placeholder="f.label"
-                class="w-full rounded-md px-3 py-2 text-sm"
-                style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
-            </div>
-          </div>
-
-          <!-- ── Zerodha-specific: token + balance section ─────────────────── -->
-          <template v-if="ex.id === 'zerodha'">
-            <div class="mt-5 pt-4" style="border-top: 1px solid var(--border)">
-              <div class="flex items-center gap-2 mb-3">
-                <span class="text-xs font-semibold uppercase tracking-wider" style="color: var(--dim)">Access Token</span>
-                <span v-if="zerodha.hasToken && !zerodha.expired"
-                  class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
-                  style="background: rgba(0,220,130,0.12); color: var(--bull)">● Active</span>
-                <span v-else-if="zerodha.expired"
-                  class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
-                  style="background: rgba(255,59,92,0.12); color: var(--bear)">● Expired</span>
-                <span v-else
-                  class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
-                  style="background: var(--surface); color: var(--dim)">○ Not Generated</span>
-              </div>
-
-              <!-- Token message -->
-              <div v-if="zerodha.tokenMsg" class="mb-3 rounded-md px-3 py-2 text-xs"
-                :style="zerodha.tokenMsgType === 'success'
-                  ? 'background: rgba(0,220,130,0.08); border: 1px solid rgba(0,220,130,0.25); color: var(--bull)'
-                  : zerodha.tokenMsgType === 'error'
-                  ? 'background: rgba(255,59,92,0.08); border: 1px solid rgba(255,59,92,0.25); color: var(--bear)'
-                  : 'background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.25); color: #818cf8'">
-                {{ zerodha.tokenMsg }}
-              </div>
-
-              <!-- Token buttons row -->
-              <div class="flex flex-wrap gap-2 items-center">
-                <button @click="openZerodhaLogin" :disabled="zerodha.tokenLoading"
-                  class="flex items-center gap-1.5 rounded-md px-4 py-2 text-xs font-semibold"
-                  style="background: linear-gradient(135deg,#6366f1,#4f46e5); color: #fff">
-                  <span v-if="zerodha.tokenLoading">⏳</span>
-                  <span v-else>🔑</span>
-                  {{ zerodha.hasToken && !zerodha.expired ? 'Refresh Token' : 'Generate Token' }}
-                </button>
-
-                <button v-if="zerodha.hasToken && !zerodha.expired" @click="fetchZerodhaBalance"
-                  :disabled="zerodha.balanceLoading"
-                  class="flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-semibold"
-                  style="background: var(--surface); border: 1px solid var(--border); color: var(--muted)">
-                  {{ zerodha.balanceLoading ? '…' : '↻ Refresh Balance' }}
-                </button>
-
-                <a v-if="zerodha.hasToken && !zerodha.expired"
-                  :href="zerodhaFundsUrl" target="_blank" rel="noopener"
-                  class="flex items-center gap-1.5 rounded-md px-4 py-2 text-xs font-semibold"
-                  style="background: rgba(0,220,130,0.12); border: 1px solid rgba(0,220,130,0.3); color: var(--bull); text-decoration: none">
-                  💰 Add Funds
-                </a>
-              </div>
-
-              <!-- Manual fallback: paste request_token if auto-redirect fails -->
-              <div v-if="showManualTokenInput" class="mt-3 flex gap-2">
-                <input v-model="manualRequestToken" type="text"
-                  placeholder="Paste request_token from redirect URL (fallback only)…"
-                  class="flex-1 rounded-md px-3 py-2 text-xs"
-                  style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
-                <button @click="exchangeToken(manualRequestToken)" :disabled="zerodha.tokenExchanging || !manualRequestToken"
-                  class="rounded-md px-4 py-2 text-xs font-semibold"
-                  style="background: var(--accent); color: #fff">
-                  {{ zerodha.tokenExchanging ? '…' : 'Verify' }}
-                </button>
-              </div>
-
-              <!-- Balance cards -->
-              <div v-if="zerodha.hasToken && !zerodha.expired && (zerodha.equity || zerodha.commodity)"
-                class="mt-4 grid grid-cols-2 gap-3">
-                <div v-if="zerodha.equity" class="rounded-lg p-3"
-                  style="background: var(--surface); border: 1px solid var(--border)">
-                  <p class="text-[10px] uppercase tracking-wider mb-2" style="color: var(--dim)">Equity Segment</p>
-                  <div class="flex justify-between items-end">
-                    <div>
-                      <p class="text-[10px]" style="color: var(--dim)">Available</p>
-                      <p class="text-base font-bold" style="color: var(--bull)">₹ {{ zerodha.equity.available }}</p>
-                    </div>
-                    <div class="text-right">
-                      <p class="text-[10px]" style="color: var(--dim)">Used</p>
-                      <p class="text-sm font-semibold" style="color: var(--bear)">₹ {{ zerodha.equity.used }}</p>
-                    </div>
-                  </div>
-                </div>
-                <div v-if="zerodha.commodity" class="rounded-lg p-3"
-                  style="background: var(--surface); border: 1px solid var(--border)">
-                  <p class="text-[10px] uppercase tracking-wider mb-2" style="color: var(--dim)">Commodity Segment</p>
-                  <div class="flex justify-between items-end">
-                    <div>
-                      <p class="text-[10px]" style="color: var(--dim)">Available</p>
-                      <p class="text-base font-bold" style="color: var(--bull)">₹ {{ zerodha.commodity.available }}</p>
-                    </div>
-                    <div class="text-right">
-                      <p class="text-[10px]" style="color: var(--dim)">Used</p>
-                      <p class="text-sm font-semibold" style="color: var(--bear)">₹ {{ zerodha.commodity.used }}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
-          <!-- ── end Zerodha section ─────────────────────────────────────── -->
-
-          <!-- Action row -->
-          <div class="flex gap-2 mt-4">
-            <button @click="saveExchange(ex)" :disabled="ex.saving"
-              class="rounded-md px-4 py-2 text-xs font-semibold"
-              style="background: var(--accent); color: #fff">
-              {{ ex.saving ? 'Saving…' : 'Save' }}
-            </button>
-            <button @click="testExchange(ex)" :disabled="ex.testing"
-              class="rounded-md px-4 py-2 text-xs font-semibold"
-              style="background: var(--surface); border: 1px solid var(--border); color: var(--muted)">
-              {{ ex.testing ? 'Testing…' : 'Test Connection' }}
-            </button>
-          </div>
-        </div>
+    <!-- ══════════════════════ SIDEBAR ══════════════════════ -->
+    <aside class="sidebar">
+      <div class="sidebar-hdr">
+        <div class="sidebar-title">Settings</div>
+        <div class="sidebar-sub">Platform Configuration</div>
       </div>
-
-      <!-- ══════ ENGINE TAB ══════ -->
-      <div v-else-if="activeTab === 'engine'">
-        <div class="space-y-2">
-          <div v-for="eng in engines" :key="eng.key" class="rounded-xl overflow-hidden"
-            style="background: var(--card); border: 1px solid var(--border)">
-            <div class="flex items-center gap-3 p-4 cursor-pointer"
-              @click="eng.params.length ? (expandedEngine = expandedEngine === eng.key ? null : eng.key) : null">
-              <div class="flex-1">
-                <h3 class="font-medium text-sm" style="color: var(--text)">{{ eng.name }}</h3>
-              </div>
-              <button @click.stop="eng.enabled = !eng.enabled"
-                class="relative w-10 h-5 rounded-full transition-colors"
-                :style="eng.enabled ? 'background: var(--bull)' : 'background: var(--border)'">
-                <span class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform"
-                  :style="eng.enabled ? 'left: 22px' : 'left: 2px'"></span>
-              </button>
-              <span v-if="eng.params.length" class="text-[10px]" style="color: var(--dim)">
-                {{ expandedEngine === eng.key ? '▲' : '▼' }}
-              </span>
-            </div>
-            <div v-if="expandedEngine === eng.key && eng.params.length"
-              class="px-4 pb-4 pt-0" style="border-top: 1px solid var(--border)">
-              <div class="grid gap-3 md:grid-cols-2 mt-3">
-                <div v-for="p in eng.params" :key="p.key">
-                  <label class="block text-[10px] mb-1 uppercase tracking-wider" style="color: var(--dim)">{{ p.label }}</label>
-                  <input v-model="engineValues[p.key]" :type="p.type" :placeholder="String(p.default)"
-                    class="w-full rounded-md px-3 py-2 text-sm"
-                    style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <button @click="saveEngines" :disabled="engineSaving"
-          class="mt-4 rounded-md px-4 py-2 text-xs font-semibold"
-          style="background: var(--accent); color: #fff">
-          {{ engineSaving ? 'Saving…' : 'Save Engine Settings' }}
+      <nav class="sidebar-nav">
+        <button v-for="t in tabs" :key="t.id" @click="activeTab = t.id"
+          class="nav-btn" :class="{ active: activeTab === t.id }">
+          <span class="nav-icon">{{ t.icon }}</span>
+          <span class="nav-text">
+            <span class="nav-label">{{ t.label }}</span>
+            <span class="nav-desc">{{ t.desc }}</span>
+          </span>
+          <span v-if="activeTab === t.id" class="nav-arrow">›</span>
         </button>
+      </nav>
+      <div class="sidebar-footer">
+        WaveTrader v3
       </div>
+    </aside>
 
-      <!-- ══════ SYSTEM TAB ══════ -->
-      <div v-else-if="activeTab === 'system'" class="space-y-6">
-        <div class="rounded-xl p-5" style="background: var(--card); border: 1px solid var(--border)">
-          <h3 class="text-sm font-semibold mb-4" style="color: var(--text)">Data Pipeline</h3>
-          <div class="grid gap-4 md:grid-cols-3">
-            <div>
-              <label class="block text-[10px] mb-1 uppercase tracking-wider" style="color: var(--dim)">Fetch Interval (seconds)</label>
-              <input v-model="systemValues.fetch_interval" type="number" min="10" max="300"
-                class="w-full rounded-md px-3 py-2 text-sm"
-                style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
+    <!-- ══════════════════════ MAIN CONTENT ══════════════════════ -->
+    <main class="settings-main">
+
+      <!-- ───────── EXCHANGE TAB ───────── -->
+      <template v-if="activeTab === 'exchange'">
+        <div class="page-hdr">
+          <h2 class="page-title">Exchange Connections</h2>
+          <p class="page-desc">Configure API credentials for each market data source. All secrets are AES-256 encrypted at rest.</p>
+        </div>
+
+        <div class="ex-grid">
+          <div v-for="ex in exchanges" :key="ex.id" class="ex-card">
+            <!-- accent bar -->
+            <div class="ex-accent" :style="{ background: ex.accent }" />
+
+            <!-- header -->
+            <div class="ex-head">
+              <div class="ex-logo" :style="{ background: ex.accent + '18', color: ex.accent, borderColor: ex.accent + '30' }">
+                {{ ex.logo }}
+              </div>
+              <div class="ex-info">
+                <div class="ex-name">{{ ex.name }}</div>
+                <div class="ex-desc-text">{{ ex.desc }}</div>
+              </div>
+              <div class="ex-badge-area">
+                <span class="ex-market">{{ ex.market }}</span>
+                <span v-if="ex.status?.success" class="ex-status st-ok"><span class="pulse-dot dot-green" /> Connected</span>
+                <span v-else-if="ex.status && !ex.status.success" class="ex-status st-err">Failed</span>
+                <span v-else class="ex-status st-off">Offline</span>
+              </div>
             </div>
-            <div>
-              <label class="block text-[10px] mb-1 uppercase tracking-wider" style="color: var(--dim)">Historical Depth (months)</label>
-              <input v-model="systemValues.historical_depth" type="number" min="1" max="12"
-                class="w-full rounded-md px-3 py-2 text-sm"
-                style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
+
+            <!-- fields -->
+            <div class="ex-fields">
+              <div v-for="f in ex.fields" :key="f.key" class="field-group">
+                <label class="field-label">{{ f.label }}</label>
+                <div class="field-wrap">
+                  <select v-if="f.type === 'select'" v-model="exchangeValues[f.key]" class="field-input">
+                    <option v-for="opt in f.options" :key="opt" :value="opt">{{ opt }}</option>
+                  </select>
+                  <template v-else>
+                    <input v-model="exchangeValues[f.key]"
+                      :type="f.type === 'password' && !showPw[f.key] ? 'password' : 'text'"
+                      :placeholder="f.label" class="field-input" />
+                    <button v-if="f.type === 'password'" @click="togglePw(f.key)" class="pw-toggle">
+                      {{ showPw[f.key] ? '◉' : '○' }}
+                    </button>
+                  </template>
+                </div>
+              </div>
             </div>
-            <div>
-              <label class="block text-[10px] mb-1 uppercase tracking-wider" style="color: var(--dim)">Horizon Workers</label>
-              <input v-model="systemValues.horizon_workers" type="number" min="1" max="10"
-                class="w-full rounded-md px-3 py-2 text-sm"
-                style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
+
+            <!-- ── Zerodha Token Section ── -->
+            <template v-if="ex.id === 'zerodha'">
+              <div class="zr-section">
+                <div class="zr-row">
+                  <span class="zr-label">Session Token</span>
+                  <span v-if="zerodha.hasToken && !zerodha.expired" class="zr-badge zr-active">
+                    <span class="pulse-dot dot-green" /> Active{{ zerodha.userName ? ' · ' + zerodha.userName : '' }}
+                  </span>
+                  <span v-else-if="zerodha.expired" class="zr-badge zr-expired">Expired</span>
+                  <span v-else class="zr-badge zr-none">No Token</span>
+                </div>
+
+                <div v-if="zerodha.tokenMsg" class="zr-msg"
+                  :class="zerodha.tokenMsgType === 'success' ? 'msg-ok' : zerodha.tokenMsgType === 'error' ? 'msg-err' : 'msg-info'">
+                  {{ zerodha.tokenMsg }}
+                </div>
+
+                <div class="zr-actions">
+                  <button @click="openZerodhaLogin" :disabled="zerodha.tokenLoading" class="btn btn-primary btn-sm">
+                    {{ zerodha.hasToken && !zerodha.expired ? '↻ Refresh Token' : '⚡ Generate Token' }}
+                  </button>
+                  <button v-if="zerodha.hasToken && !zerodha.expired" @click="fetchZerodhaBalance"
+                    :disabled="zerodha.balanceLoading" class="btn btn-ghost btn-sm">
+                    {{ zerodha.balanceLoading ? '...' : '↻ Refresh Balance' }}
+                  </button>
+                  <a v-if="zerodha.hasToken && !zerodha.expired"
+                    :href="zerodhaFundsUrl" target="_blank" rel="noopener" class="btn btn-funds btn-sm">
+                    ₹ Add Funds
+                  </a>
+                </div>
+
+                <!-- Manual fallback -->
+                <div v-if="showManualTokenInput" class="zr-manual">
+                  <input v-model="manualRequestToken" type="text" placeholder="Paste request_token…" class="field-input" />
+                  <button @click="exchangeToken(manualRequestToken)"
+                    :disabled="zerodha.tokenExchanging || !manualRequestToken" class="btn btn-primary btn-sm">Verify</button>
+                </div>
+
+                <!-- Balance -->
+                <div v-if="zerodha.hasToken && !zerodha.expired && (zerodha.equity || zerodha.commodity)" class="zr-balance">
+                  <div v-if="zerodha.equity" class="bal-card">
+                    <div class="bal-head">
+                      <span class="bal-title">Equity</span>
+                    </div>
+                    <div class="bal-row">
+                      <div><span class="bal-sub">Available</span><span class="bal-val bal-green">₹{{ zerodha.equity.available }}</span></div>
+                      <div class="text-right"><span class="bal-sub">Used</span><span class="bal-val bal-red">₹{{ zerodha.equity.used }}</span></div>
+                    </div>
+                  </div>
+                  <div v-if="zerodha.commodity" class="bal-card">
+                    <div class="bal-head">
+                      <span class="bal-title">Commodity</span>
+                    </div>
+                    <div class="bal-row">
+                      <div><span class="bal-sub">Available</span><span class="bal-val bal-green">₹{{ zerodha.commodity.available }}</span></div>
+                      <div class="text-right"><span class="bal-sub">Used</span><span class="bal-val bal-red">₹{{ zerodha.commodity.used }}</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <!-- action row -->
+            <div class="ex-actions">
+              <button @click="saveExchange(ex)" :disabled="ex.saving" class="btn btn-save">
+                <span v-if="ex.saving" class="spin">↻</span>
+                {{ ex.saving ? 'Saving' : 'Save Credentials' }}
+              </button>
+              <button @click="testExchange(ex)" :disabled="ex.testing" class="btn btn-ghost">
+                {{ ex.testing ? 'Testing…' : 'Test Connection' }}
+              </button>
             </div>
           </div>
-          <div class="mt-4">
-            <label class="block text-[10px] mb-1 uppercase tracking-wider" style="color: var(--dim)">Telegram Webhook URL</label>
-            <input v-model="systemValues.telegram_webhook" type="url" placeholder="https://api.telegram.org/bot…"
-              class="w-full rounded-md px-3 py-2 text-sm"
-              style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
+        </div>
+      </template>
+
+      <!-- ───────── ENGINES TAB ───────── -->
+      <template v-if="activeTab === 'engine'">
+        <div class="page-hdr">
+          <h2 class="page-title">Analysis Engines</h2>
+          <p class="page-desc">Toggle engines on/off and tune their parameters. Changes apply to the next engine run cycle.</p>
+        </div>
+
+        <div class="eng-grid">
+          <div v-for="eng in engines" :key="eng.key" class="eng-card"
+            :class="{ 'eng-off': !eng.enabled }">
+            <div class="eng-accent" :style="{ background: eng.enabled ? engineMeta[eng.key]?.color : '#333' }" />
+            <div class="eng-head" @click="eng.params.length ? (expandedEngine = expandedEngine === eng.key ? null : eng.key) : null">
+              <span class="eng-icon" :style="{ color: engineMeta[eng.key]?.color }">{{ engineMeta[eng.key]?.icon }}</span>
+              <div class="eng-info">
+                <div class="eng-name">{{ eng.name }}</div>
+                <div class="eng-desc">{{ engineMeta[eng.key]?.desc }}</div>
+              </div>
+              <button @click.stop="eng.enabled = !eng.enabled" class="toggle-btn" :class="{ 'toggle-on': eng.enabled }">
+                <span class="toggle-thumb" />
+              </button>
+            </div>
+            <div v-if="expandedEngine === eng.key && eng.params.length" class="eng-params">
+              <div v-for="p in eng.params" :key="p.key" class="field-group">
+                <label class="field-label">{{ p.label }}</label>
+                <input v-model="engineValues[p.key]" :type="p.type" :placeholder="String(p.default)" class="field-input" />
+              </div>
+            </div>
           </div>
-          <button @click="saveSystem" :disabled="systemSaving"
-            class="mt-4 rounded-md px-4 py-2 text-xs font-semibold"
-            style="background: var(--accent); color: #fff">
-            {{ systemSaving ? 'Saving…' : 'Save System Settings' }}
+        </div>
+        <div class="save-row">
+          <button @click="saveEngines" :disabled="engineSaving" class="btn btn-save">
+            {{ engineSaving ? 'Saving…' : 'Save All Engine Settings' }}
           </button>
         </div>
+      </template>
 
-        <!-- Symbol Manager -->
-        <div class="rounded-xl p-5" style="background: var(--card); border: 1px solid var(--border)">
-          <SymbolManager />
+      <!-- ───────── SYSTEM TAB ───────── -->
+      <template v-if="activeTab === 'system'">
+        <div class="page-hdr">
+          <h2 class="page-title">System Configuration</h2>
+          <p class="page-desc">Data pipeline settings, worker configuration, and tracked symbols.</p>
         </div>
-      </div>
 
-      <!-- ══════ BACKUP TAB ══════ -->
-      <div v-else-if="activeTab === 'backup'" class="space-y-4">
-        <!-- Local backup -->
-        <div class="rounded-xl p-5" style="background: var(--card); border: 1px solid var(--border)">
-          <div class="flex items-center justify-between mb-4">
-            <h3 class="text-sm font-semibold" style="color: var(--text)">Local Backup</h3>
-            <button @click="backupValues.local_enabled = !backupValues.local_enabled"
-              class="relative w-10 h-5 rounded-full transition-colors"
-              :style="backupValues.local_enabled ? 'background: var(--bull)' : 'background: var(--border)'">
-              <span class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform"
-                :style="backupValues.local_enabled ? 'left: 22px' : 'left: 2px'"></span>
+        <div class="sys-card">
+          <h3 class="section-title">Data Pipeline</h3>
+          <div class="sys-grid">
+            <div class="field-group">
+              <label class="field-label">Fetch Interval <span class="field-unit">seconds</span></label>
+              <input v-model="systemValues.fetch_interval" type="number" min="10" max="300" class="field-input" />
+            </div>
+            <div class="field-group">
+              <label class="field-label">Historical Depth <span class="field-unit">months</span></label>
+              <input v-model="systemValues.historical_depth" type="number" min="1" max="12" class="field-input" />
+            </div>
+            <div class="field-group">
+              <label class="field-label">Horizon Workers <span class="field-unit">processes</span></label>
+              <input v-model="systemValues.horizon_workers" type="number" min="1" max="10" class="field-input" />
+            </div>
+          </div>
+          <div class="field-group mt-4">
+            <label class="field-label">Telegram Webhook URL</label>
+            <input v-model="systemValues.telegram_webhook" type="url" placeholder="https://api.telegram.org/bot…" class="field-input" />
+          </div>
+          <div class="save-row">
+            <button @click="saveSystem" :disabled="systemSaving" class="btn btn-save">
+              {{ systemSaving ? 'Saving…' : 'Save System Settings' }}
             </button>
           </div>
-          <div>
-            <label class="block text-[10px] mb-1 uppercase tracking-wider" style="color: var(--dim)">Retention (days)</label>
-            <input v-model="backupValues.local_retention_days" type="number" min="1" max="90"
-              class="w-48 rounded-md px-3 py-2 text-sm"
-              style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
+        </div>
+
+        <div class="sys-card">
+          <h3 class="section-title">Symbol Management</h3>
+          <SymbolManager />
+        </div>
+      </template>
+
+      <!-- ───────── BACKUP TAB ───────── -->
+      <template v-if="activeTab === 'backup'">
+        <div class="page-hdr">
+          <h2 class="page-title">Backup & Recovery</h2>
+          <p class="page-desc">Configure local and cloud backup for candles, waves, trades, and settings.</p>
+        </div>
+
+        <div class="bk-grid">
+          <!-- Local -->
+          <div class="sys-card">
+            <div class="bk-head">
+              <div>
+                <h3 class="section-title" style="margin:0">Local Backup</h3>
+                <p class="bk-sub">Stored on the server filesystem</p>
+              </div>
+              <button @click="backupValues.local_enabled = !backupValues.local_enabled"
+                class="toggle-btn" :class="{ 'toggle-on': backupValues.local_enabled }">
+                <span class="toggle-thumb" />
+              </button>
+            </div>
+            <div class="field-group mt-3">
+              <label class="field-label">Retention Period <span class="field-unit">days</span></label>
+              <input v-model="backupValues.local_retention_days" type="number" min="1" max="90"
+                class="field-input" style="max-width: 140px" />
+            </div>
+          </div>
+
+          <!-- R2 -->
+          <div class="sys-card">
+            <h3 class="section-title">Cloudflare R2 <span class="bk-tag">S3-compatible</span></h3>
+            <div class="sys-grid cols-2">
+              <div class="field-group">
+                <label class="field-label">Account ID</label>
+                <input v-model="backupValues.r2_account_id" type="text" placeholder="Account ID" class="field-input" />
+              </div>
+              <div class="field-group">
+                <label class="field-label">Bucket Name</label>
+                <input v-model="backupValues.r2_bucket" type="text" placeholder="wavetrader-backups" class="field-input" />
+              </div>
+              <div class="field-group">
+                <label class="field-label">Access Key</label>
+                <div class="field-wrap">
+                  <input v-model="backupValues.r2_access_key"
+                    :type="showPw.r2ak ? 'text' : 'password'" class="field-input" placeholder="••••••" />
+                  <button @click="togglePw('r2ak')" class="pw-toggle">{{ showPw.r2ak ? '◉' : '○' }}</button>
+                </div>
+              </div>
+              <div class="field-group">
+                <label class="field-label">Secret Key</label>
+                <div class="field-wrap">
+                  <input v-model="backupValues.r2_secret_key"
+                    :type="showPw.r2sk ? 'text' : 'password'" class="field-input" placeholder="••••••" />
+                  <button @click="togglePw('r2sk')" class="pw-toggle">{{ showPw.r2sk ? '◉' : '○' }}</button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <!-- Cloudflare R2 -->
-        <div class="rounded-xl p-5" style="background: var(--card); border: 1px solid var(--border)">
-          <h3 class="text-sm font-semibold mb-4" style="color: var(--text)">Cloudflare R2 Storage</h3>
-          <div class="grid gap-3 md:grid-cols-2">
-            <div>
-              <label class="block text-[10px] mb-1 uppercase tracking-wider" style="color: var(--dim)">Account ID</label>
-              <input v-model="backupValues.r2_account_id" type="text" placeholder="Account ID"
-                class="w-full rounded-md px-3 py-2 text-sm"
-                style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
-            </div>
-            <div>
-              <label class="block text-[10px] mb-1 uppercase tracking-wider" style="color: var(--dim)">Bucket Name</label>
-              <input v-model="backupValues.r2_bucket" type="text" placeholder="wavetrader-backups"
-                class="w-full rounded-md px-3 py-2 text-sm"
-                style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
-            </div>
-            <div>
-              <label class="block text-[10px] mb-1 uppercase tracking-wider" style="color: var(--dim)">Access Key</label>
-              <input v-model="backupValues.r2_access_key" type="password" placeholder="••••••••"
-                class="w-full rounded-md px-3 py-2 text-sm"
-                style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
-            </div>
-            <div>
-              <label class="block text-[10px] mb-1 uppercase tracking-wider" style="color: var(--dim)">Secret Key</label>
-              <input v-model="backupValues.r2_secret_key" type="password" placeholder="••••••••"
-                class="w-full rounded-md px-3 py-2 text-sm"
-                style="background: var(--surface); border: 1px solid var(--border); color: var(--text)" />
-            </div>
-          </div>
-
-          <!-- Backup scope -->
-          <div class="mt-4">
-            <label class="block text-[10px] mb-2 uppercase tracking-wider" style="color: var(--dim)">Backup Scope</label>
-            <div class="flex gap-4 flex-wrap">
-              <label v-for="scope in ['candles', 'waves', 'settings', 'trades']" :key="scope"
-                class="flex items-center gap-2 text-xs cursor-pointer" style="color: var(--muted)">
-                <input type="checkbox" v-model="backupValues[`scope_${scope}`]"
-                  class="rounded" style="accent-color: var(--accent)" />
-                {{ scope.charAt(0).toUpperCase() + scope.slice(1) }}
-              </label>
-            </div>
+        <!-- Scope -->
+        <div class="sys-card">
+          <h3 class="section-title">Backup Scope</h3>
+          <div class="scope-row">
+            <label v-for="scope in ['candles','waves','settings','trades']" :key="scope" class="scope-chip"
+              :class="{ 'scope-on': backupValues['scope_'+scope] }">
+              <input type="checkbox" v-model="backupValues['scope_'+scope]" class="sr-only" />
+              <span class="scope-check">{{ backupValues['scope_'+scope] ? '✓' : '' }}</span>
+              {{ scope.charAt(0).toUpperCase() + scope.slice(1) }}
+            </label>
           </div>
         </div>
 
-        <button @click="saveBackup" :disabled="backupSaving"
-          class="rounded-md px-4 py-2 text-xs font-semibold"
-          style="background: var(--accent); color: #fff">
-          {{ backupSaving ? 'Saving…' : 'Save Backup Settings' }}
-        </button>
-      </div>
+        <div class="save-row">
+          <button @click="saveBackup" :disabled="backupSaving" class="btn btn-save">
+            {{ backupSaving ? 'Saving…' : 'Save Backup Settings' }}
+          </button>
+        </div>
+      </template>
 
-    </div>
+    </main>
   </div>
+</template>
+
+<style scoped>
+/* ── LAYOUT ─────────────────────────────────────────── */
+.settings-root {
+  display: flex;
+  height: calc(100vh - 52px);
+  background: #0a0b0f;
+  overflow: hidden;
+}
+.sidebar {
+  width: 240px;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  background: #0d0e14;
+  border-right: 1px solid rgba(255,255,255,0.06);
+}
+.sidebar-hdr {
+  padding: 24px 20px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.sidebar-title { font-size: 18px; font-weight: 700; color: #e2e8f0; letter-spacing: -0.3px; }
+.sidebar-sub { font-size: 11px; color: #475569; margin-top: 2px; }
+.sidebar-nav { flex: 1; padding: 12px 8px; display: flex; flex-direction: column; gap: 2px; }
+.nav-btn {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 8px; border: none;
+  background: transparent; cursor: pointer; text-align: left;
+  transition: all 0.15s;
+}
+.nav-btn:hover { background: rgba(255,255,255,0.04); }
+.nav-btn.active { background: rgba(99,102,241,0.1); }
+.nav-icon {
+  width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
+  border-radius: 8px; background: rgba(255,255,255,0.04);
+  font-size: 15px; color: #64748b;
+}
+.nav-btn.active .nav-icon { background: rgba(99,102,241,0.15); color: #818cf8; }
+.nav-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.nav-label { font-size: 13px; font-weight: 600; color: #94a3b8; }
+.nav-btn.active .nav-label { color: #e2e8f0; }
+.nav-desc { font-size: 10px; color: #475569; }
+.nav-arrow { font-size: 16px; color: #818cf8; font-weight: 700; }
+.sidebar-footer { padding: 16px 20px; font-size: 10px; color: #334155; border-top: 1px solid rgba(255,255,255,0.04); }
+.settings-main { flex: 1; overflow-y: auto; padding: 28px 32px; }
+
+/* ── PAGE HEADER ────────────────────────────────────── */
+.page-hdr { margin-bottom: 24px; }
+.page-title { font-size: 20px; font-weight: 700; color: #e2e8f0; letter-spacing: -0.3px; margin: 0; }
+.page-desc { font-size: 12px; color: #64748b; margin-top: 4px; }
+
+/* ── EXCHANGE CARDS ─────────────────────────────────── */
+.ex-grid { display: flex; flex-direction: column; gap: 16px; }
+.ex-card {
+  position: relative; border-radius: 12px; overflow: hidden;
+  background: #111318; border: 1px solid rgba(255,255,255,0.06);
+  padding: 0; transition: border-color 0.2s;
+}
+.ex-card:hover { border-color: rgba(255,255,255,0.1); }
+.ex-accent { height: 3px; width: 100%; }
+.ex-head { display: flex; align-items: center; gap: 14px; padding: 18px 20px 14px; }
+.ex-logo {
+  width: 40px; height: 40px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; font-weight: 800; border: 1px solid;
+  flex-shrink: 0;
+}
+.ex-info { flex: 1; min-width: 0; }
+.ex-name { font-size: 15px; font-weight: 700; color: #e2e8f0; }
+.ex-desc-text { font-size: 11px; color: #64748b; margin-top: 1px; }
+.ex-badge-area { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.ex-market {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
+  color: #475569; background: rgba(255,255,255,0.04); padding: 2px 8px; border-radius: 4px;
+}
+.ex-status { font-size: 11px; font-weight: 600; display: flex; align-items: center; gap: 5px; }
+.st-ok { color: #34d399; }
+.st-err { color: #f87171; }
+.st-off { color: #475569; }
+.ex-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; padding: 0 20px; }
+.ex-actions { display: flex; gap: 8px; padding: 16px 20px 18px; }
+
+/* ── ZERODHA ────────────────────────────────────────── */
+.zr-section { margin: 12px 20px 0; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.06); }
+.zr-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.zr-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #475569; }
+.zr-badge { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 6px; display: flex; align-items: center; gap: 5px; }
+.zr-active { background: rgba(52,211,153,0.1); color: #34d399; }
+.zr-expired { background: rgba(248,113,113,0.1); color: #f87171; }
+.zr-none { background: rgba(255,255,255,0.04); color: #475569; }
+.zr-msg { font-size: 11px; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; border: 1px solid; }
+.msg-ok { background: rgba(52,211,153,0.06); border-color: rgba(52,211,153,0.2); color: #34d399; }
+.msg-err { background: rgba(248,113,113,0.06); border-color: rgba(248,113,113,0.2); color: #f87171; }
+.msg-info { background: rgba(129,140,248,0.06); border-color: rgba(129,140,248,0.2); color: #818cf8; }
+.zr-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.zr-manual { display: flex; gap: 8px; margin-bottom: 12px; }
+.zr-balance { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 4px; }
+.bal-card { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px; }
+.bal-head { margin-bottom: 8px; }
+.bal-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #475569; }
+.bal-row { display: flex; justify-content: space-between; align-items: flex-end; }
+.bal-sub { display: block; font-size: 9px; color: #475569; margin-bottom: 2px; }
+.bal-val { display: block; font-size: 16px; font-weight: 800; letter-spacing: -0.3px; }
+.bal-green { color: #34d399; }
+.bal-red { color: #f87171; }
+.text-right { text-align: right; }
+
+/* ── ENGINE CARDS ────────────────────────────────────── */
+.eng-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+.eng-card {
+  border-radius: 10px; overflow: hidden;
+  background: #111318; border: 1px solid rgba(255,255,255,0.06);
+  transition: opacity 0.2s;
+}
+.eng-off { opacity: 0.5; }
+.eng-accent { height: 2px; }
+.eng-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; cursor: pointer; }
+.eng-icon { font-size: 18px; flex-shrink: 0; width: 28px; text-align: center; }
+.eng-info { flex: 1; min-width: 0; }
+.eng-name { font-size: 13px; font-weight: 700; color: #e2e8f0; }
+.eng-desc { font-size: 10px; color: #64748b; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eng-params { padding: 0 16px 14px; border-top: 1px solid rgba(255,255,255,0.04); display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding-top: 12px; }
+
+/* ── SYSTEM / BACKUP CARDS ──────────────────────────── */
+.sys-card {
+  background: #111318; border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px; padding: 20px; margin-bottom: 16px;
+}
+.section-title { font-size: 14px; font-weight: 700; color: #e2e8f0; margin: 0 0 16px; }
+.sys-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.sys-grid.cols-2 { grid-template-columns: 1fr 1fr; }
+.bk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.bk-head { display: flex; align-items: center; justify-content: space-between; }
+.bk-sub { font-size: 11px; color: #475569; margin-top: 2px; }
+.bk-tag { font-size: 9px; font-weight: 600; color: #475569; background: rgba(255,255,255,0.04); padding: 2px 6px; border-radius: 3px; vertical-align: middle; margin-left: 6px; }
+
+/* ── SCOPE CHIPS ────────────────────────────────────── */
+.scope-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.scope-chip {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 8px 16px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+  color: #64748b; transition: all 0.15s;
+}
+.scope-chip:hover { border-color: rgba(255,255,255,0.12); }
+.scope-on { background: rgba(99,102,241,0.08); border-color: rgba(99,102,241,0.25); color: #818cf8; }
+.scope-check { width: 16px; height: 16px; border-radius: 4px; display: flex; align-items: center; justify-content: center;
+  font-size: 10px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); }
+.scope-on .scope-check { background: #6366f1; border-color: #6366f1; color: #fff; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+
+/* ── FORM FIELDS ────────────────────────────────────── */
+.field-group { display: flex; flex-direction: column; gap: 4px; }
+.field-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #475569; }
+.field-unit { font-weight: 500; color: #334155; text-transform: lowercase; letter-spacing: 0; }
+.field-wrap { position: relative; display: flex; align-items: center; }
+.field-input {
+  width: 100%; padding: 9px 12px; border-radius: 8px; font-size: 13px;
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+  color: #e2e8f0; outline: none; transition: border-color 0.15s;
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+}
+.field-input:focus { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.15); }
+.field-input::placeholder { color: #334155; font-family: inherit; }
+.pw-toggle {
+  position: absolute; right: 10px; background: none; border: none;
+  color: #475569; cursor: pointer; font-size: 14px; padding: 4px;
+}
+.pw-toggle:hover { color: #818cf8; }
+
+/* ── BUTTONS ────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+  border-radius: 8px; border: none; cursor: pointer; transition: all 0.15s; text-decoration: none;
+  padding: 10px 18px;
+}
+.btn-sm { padding: 7px 14px; font-size: 11px; }
+.btn-save {
+  background: linear-gradient(135deg, #6366f1, #4f46e5); color: #fff;
+  box-shadow: 0 1px 3px rgba(99,102,241,0.25);
+}
+.btn-save:hover { box-shadow: 0 2px 8px rgba(99,102,241,0.35); transform: translateY(-1px); }
+.btn-save:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.btn-primary { background: linear-gradient(135deg, #6366f1, #4f46e5); color: #fff; }
+.btn-ghost {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); color: #94a3b8;
+}
+.btn-ghost:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.12); }
+.btn-funds { background: rgba(52,211,153,0.1); color: #34d399; border: 1px solid rgba(52,211,153,0.2); }
+.btn-funds:hover { background: rgba(52,211,153,0.15); }
+.save-row { margin-top: 16px; display: flex; gap: 10px; }
+
+/* ── TOGGLE ─────────────────────────────────────────── */
+.toggle-btn {
+  position: relative; width: 40px; height: 22px; border-radius: 11px; border: none;
+  background: rgba(255,255,255,0.08); cursor: pointer; transition: background 0.2s; flex-shrink: 0;
+}
+.toggle-on { background: #6366f1; }
+.toggle-thumb {
+  position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; transition: transform 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+.toggle-on .toggle-thumb { transform: translateX(18px); }
+
+/* ── PULSE ──────────────────────────────────────────── */
+.pulse-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.dot-green { background: #34d399; box-shadow: 0 0 6px rgba(52,211,153,0.5); animation: pulse 2s infinite; }
+@keyframes pulse { 0%, 100% { box-shadow: 0 0 4px rgba(52,211,153,0.4); } 50% { box-shadow: 0 0 10px rgba(52,211,153,0.7); } }
+
+/* ── TOAST ──────────────────────────────────────────── */
+.toast-bar {
+  position: fixed; top: 16px; right: 16px; z-index: 999; display: flex; align-items: center; gap: 8px;
+  padding: 12px 18px; border-radius: 10px; font-size: 12px; font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4); border: 1px solid;
+}
+.toast-ok { background: #0b1a14; border-color: rgba(52,211,153,0.25); color: #34d399; }
+.toast-err { background: #1a0b0b; border-color: rgba(248,113,113,0.25); color: #f87171; }
+.toast-dot { width: 6px; height: 6px; border-radius: 50%; }
+.dot-ok { background: #34d399; }
+.dot-err { background: #f87171; }
+.toast-enter-active, .toast-leave-active { transition: all 0.3s ease; }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(40px); }
+
+/* ── SPIN ───────────────────────────────────────────── */
+.spin { display: inline-block; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── RESPONSIVE ─────────────────────────────────────── */
+@media (max-width: 768px) {
+  .settings-root { flex-direction: column; height: auto; }
+  .sidebar { width: 100%; min-width: auto; flex-direction: row; border-right: none; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .sidebar-hdr { display: none; }
+  .sidebar-nav { flex-direction: row; padding: 8px; overflow-x: auto; }
+  .nav-desc, .nav-arrow, .sidebar-footer { display: none; }
+  .settings-main { padding: 16px; }
+  .ex-fields, .sys-grid, .bk-grid, .eng-grid { grid-template-columns: 1fr; }
+  .sys-grid.cols-2 { grid-template-columns: 1fr; }
+  .zr-balance { grid-template-columns: 1fr; }
+}
+.mt-3 { margin-top: 12px; }
+.mt-4 { margin-top: 16px; }
+</style>
 </template>
