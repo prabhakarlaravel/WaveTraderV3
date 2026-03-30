@@ -1,5 +1,6 @@
 import { ref, computed, watch } from 'vue'
 import axios from 'axios'
+import { toISTEpoch } from '../utils/timezone'
 
 /**
  * Backtest replay state machine.
@@ -41,13 +42,8 @@ export function useBacktestReplay() {
     return parseFloat(currentCandle.value.close)
   })
 
-  // Browser's local timezone offset (must match useChartStore)
-  const LOCAL_TZ_OFFSET = -(new Date().getTimezoneOffset()) * 60
-
-  function toLocalEpoch(ts) {
-    const utcStr = ts.endsWith('Z') ? ts : String(ts).replace(' ', 'T') + 'Z'
-    return Math.floor(new Date(utcStr).getTime() / 1000) + LOCAL_TZ_OFFSET
-  }
+  // All times displayed in IST
+  const toLocalEpoch = toISTEpoch
 
   const formattedVisible = computed(() =>
     visibleCandles.value.map(c => ({

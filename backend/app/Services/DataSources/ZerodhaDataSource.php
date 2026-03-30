@@ -175,7 +175,8 @@ class ZerodhaDataSource implements DataSourceInterface
 
                 return collect($data)->map(fn (array $row) => [
                     'timeframe' => $timeframe,
-                    'timestamp' => Carbon::parse($row[0])->toDateTimeString(),
+                    // Zerodha returns IST timestamps — convert to UTC for consistent storage
+                    'timestamp' => Carbon::parse($row[0], 'Asia/Kolkata')->utc()->toDateTimeString(),
                     'open' => (float) $row[1],
                     'high' => (float) $row[2],
                     'low' => (float) $row[3],

@@ -1,5 +1,6 @@
 import { watch, ref, nextTick } from 'vue'
 import { LineSeries } from 'lightweight-charts'
+import { toISTEpoch } from '../utils/timezone'
 
 /**
  * Full SVG overlay system for rendering waves, OBs, FVGs, BOS/CHOCH, VWAP
@@ -11,13 +12,8 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
   let vwapL1Series = null
   const svgOverlay = ref(null)
 
-  // Browser's local timezone offset (must match useChartStore)
-  const LOCAL_TZ_OFFSET = -(new Date().getTimezoneOffset()) * 60
-
-  function toUnix(ts) {
-    const utcStr = ts.endsWith('Z') ? ts : String(ts).replace(' ', 'T') + 'Z'
-    return Math.floor(new Date(utcStr).getTime() / 1000) + LOCAL_TZ_OFFSET
-  }
+  // Alias for overlay coordinate mapping — all times displayed in IST
+  const toUnix = toISTEpoch
 
   // ── Coordinate helpers ──
   function getX(time) {

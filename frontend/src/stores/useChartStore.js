@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import axios from 'axios'
+import { toISTEpoch } from '../utils/timezone'
 
 const PERSIST_KEY = 'wt3_active_symbol'
 const PERSIST_TF_KEY = 'wt3_active_timeframe'
@@ -21,19 +22,9 @@ export const useChartStore = defineStore('chart', () => {
     symbols.value.find((s) => s.id === activeSymbolId.value)
   )
 
-  // Browser's local timezone offset. DB stores UTC; append 'Z' to force UTC parse,
-  // then add offset so lightweight-charts displays in local time (IST, EST, etc.)
-  const LOCAL_TZ_OFFSET = -(new Date().getTimezoneOffset()) * 60
-
-  function toLocalEpoch(ts) {
-    // Append 'Z' so JS parses as UTC, then shift to local timezone
-    const utcStr = ts.endsWith('Z') ? ts : ts.replace(' ', 'T') + 'Z'
-    return Math.floor(new Date(utcStr).getTime() / 1000) + LOCAL_TZ_OFFSET
-  }
-
   const formattedCandles = computed(() =>
     candles.value.map((c) => ({
-      time: toLocalEpoch(c.timestamp),
+      time: toISTEpoch(c.timestamp),
       open: parseFloat(c.open),
       high: parseFloat(c.high),
       low: parseFloat(c.low),
@@ -46,7 +37,7 @@ export const useChartStore = defineStore('chart', () => {
       const open = parseFloat(c.open)
       const close = parseFloat(c.close)
       return {
-        time: toLocalEpoch(c.timestamp),
+        time: toISTEpoch(c.timestamp),
         value: parseFloat(c.volume),
         color: close >= open ? 'rgba(38, 166, 154, 0.3)' : 'rgba(239, 83, 80, 0.3)',
       }
