@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import axios from 'axios'
 import SymbolSelector from '../components/shared/SymbolSelector.vue'
 
@@ -7,8 +7,9 @@ const symbols = ref([])
 const selectedSymbol = ref(null)
 const scanResult = ref(null)
 const scanning = ref(false)
+const activeTf = ref('1M')
 const fillingTf = ref('')
-const fillProgress = reactive({})  // { tf: { status, filled, total, pct, startTime, elapsed } }
+const fillQueue = ref([])       // [ { tf, status, pct, filled, total, elapsed } ]
 const activityLog = ref([])
 
 const tfOrder = ['1M', '5M', '15M', '1H', '4H', '1D']
@@ -22,26 +23,30 @@ onMounted(async () => {
   }
 })
 
-function addLog(msg, color = '#34d399') {
+// ── Activity log ─────────────────────────────────────────────────────────────
+function addLog(msg, color = '#10b981') {
   activityLog.value.unshift({ msg, color, time: new Date().toLocaleTimeString() })
-  if (activityLog.value.length > 30) activityLog.value.pop()
+  if (activityLog.value.length > 40) activityLog.value.pop()
 }
 
+// ── Scan ─────────────────────────────────────────────────────────────────────
 async function smartScan() {
   if (!selectedSymbol.value) return
   scanning.value = true
-  addLog('Scanning 6 timeframes...', '#7c3aed')
+  fillQueue.value = []
+  addLog('Scanning 6 timeframes…', '#8b5cf6')
   try {
     const { data } = await axios.post('/api/v1/gaps/scan', { symbol_id: selectedSymbol.value })
     scanResult.value = data
-    addLog(`Smart Scan completed — found ${data.totalGaps} gaps`, '#34d399')
+    addLog(`Scan complete — ${data.totalGaps} gap${data.totalGaps !== 1 ? 's' : ''} found`, '#10b981')
   } catch (e) {
-    addLog(`Scan failed: ${e.message}`, '#ef5350')
+    addLog(`Scan failed: ${e.response?.data?.message || e.message}`, '#ef4444')
   } finally {
     scanning.value = false
   }
 }
 
+// ── Fill single TF ───────────────────────────────────────────────────────────
 async function fillGap(tf) {
   if (!selectedSymbol.value || fillingTf.value) return
   fillingTf.value = tf
@@ -49,313 +54,490 @@ async function fillGap(tf) {
   const tfData = scanResult.value?.timeframes?.[tf]
   const totalMissing = tfData?.gaps?.reduce((s, g) => s + g.missingCandles, 0) || 0
 
-  fillProgress[tf] = { status: 'filling', filled: 0, total: totalMissing, pct: 0, startTime: Date.now(), elapsed: '0s' }
-  addLog(`${tf} gap fill started — ${totalMissing} candles to fetch`, '#2563eb')
+  // Add to queue
+  const qi = fillQueue.value.findIndex(q => q.tf === tf)
+  const qItem = { tf, status: 'filling', pct: 0, filled: 0, total: totalMissing, elapsed: '0s', startTime: Date.now() }
+  if (qi >= 0) fillQueue.value[qi] = qItem
+  else fillQueue.value.push(qItem)
 
-  // Simulate progress ticks while API runs
-  const progressTimer = setInterval(() => {
-    if (fillProgress[tf]?.status === 'filling') {
-      const elapsed = ((Date.now() - fillProgress[tf].startTime) / 1000).toFixed(1)
-      fillProgress[tf].elapsed = `${elapsed}s`
-      // Gradual progress while waiting
-      if (fillProgress[tf].pct < 90) {
-        fillProgress[tf].pct = Math.min(90, fillProgress[tf].pct + 2)
-        fillProgress[tf].filled = Math.floor(totalMissing * fillProgress[tf].pct / 100)
-      }
+  addLog(`${tf} — filling ${totalMissing} candles…`, '#3b82f6')
+
+  // Progress ticker
+  const timer = setInterval(() => {
+    const q = fillQueue.value.find(q => q.tf === tf)
+    if (q?.status === 'filling') {
+      q.elapsed = ((Date.now() - q.startTime) / 1000).toFixed(1) + 's'
+      if (q.pct < 90) { q.pct = Math.min(90, q.pct + 2); q.filled = Math.floor(totalMissing * q.pct / 100) }
     }
   }, 200)
 
   try {
     const { data } = await axios.post('/api/v1/gaps/fill', { symbol_id: selectedSymbol.value, timeframe: tf })
-
-    clearInterval(progressTimer)
-    const elapsed = ((Date.now() - fillProgress[tf].startTime) / 1000).toFixed(1)
-    const actualFilled = data.filled || 0
-
+    clearInterval(timer)
+    const q = fillQueue.value.find(q => q.tf === tf)
+    const elapsed = ((Date.now() - q.startTime) / 1000).toFixed(1) + 's'
     if (data.success) {
-      fillProgress[tf] = { status: 'done', filled: actualFilled, total: totalMissing, pct: 100, elapsed: `${elapsed}s` }
-      addLog(`✓ ${tf} filled — ${actualFilled} candles fetched in ${elapsed}s`, '#34d399')
+      Object.assign(q, { status: 'done', pct: 100, filled: data.filled || totalMissing, elapsed })
+      addLog(`✓ ${tf} — ${data.filled} candles filled in ${elapsed}`, '#10b981')
     } else {
-      fillProgress[tf] = { status: 'error', filled: 0, total: totalMissing, pct: 0, elapsed: `${elapsed}s` }
-      addLog(`✕ ${tf}: ${data.message}`, '#ef5350')
+      Object.assign(q, { status: 'error', elapsed })
+      addLog(`✕ ${tf}: ${data.message}`, '#ef4444')
     }
-
-    // Refresh scan data after fill
     await smartScan()
   } catch (e) {
-    clearInterval(progressTimer)
-    fillProgress[tf] = { ...fillProgress[tf], status: 'error' }
-    addLog(`✕ ${tf} fill failed: ${e.response?.data?.message || e.message}`, '#ef5350')
+    clearInterval(timer)
+    const q = fillQueue.value.find(q => q.tf === tf)
+    if (q) q.status = 'error'
+    addLog(`✕ ${tf} failed: ${e.response?.data?.message || e.message}`, '#ef4444')
   } finally {
     fillingTf.value = ''
   }
 }
 
-async function fillAll() {
-  if (!scanResult.value) return
+// ── Fix All ──────────────────────────────────────────────────────────────────
+const fixingAll = ref(false)
+
+async function fixAll() {
+  if (!scanResult.value || fixingAll.value) return
+  fixingAll.value = true
+
   const tfsWithGaps = tfOrder.filter(tf => (scanResult.value.timeframes[tf]?.gapCount ?? 0) > 0)
-  addLog(`Auto-Fill All started — ${tfsWithGaps.length} timeframes`, '#7c3aed')
+  if (!tfsWithGaps.length) {
+    addLog('No gaps to fix!', '#10b981')
+    fixingAll.value = false
+    return
+  }
+
+  // Pre-populate queue
+  fillQueue.value = tfsWithGaps.map(tf => {
+    const totalMissing = scanResult.value.timeframes[tf]?.gaps?.reduce((s, g) => s + g.missingCandles, 0) || 0
+    return { tf, status: 'queued', pct: 0, filled: 0, total: totalMissing, elapsed: '—', startTime: 0 }
+  })
+
+  addLog(`Fix All started — ${tfsWithGaps.length} timeframes queued`, '#8b5cf6')
+
   for (const tf of tfsWithGaps) {
     await fillGap(tf)
   }
-  addLog('Auto-Fill All completed!', '#34d399')
+
+  addLog('Fix All completed!', '#10b981')
+  fixingAll.value = false
 }
 
-const totalMissing = computed(() => {
-  if (!scanResult.value) return 0
-  return Object.values(scanResult.value.timeframes).reduce((s, tf) =>
-    s + (tf.gaps?.reduce((gs, g) => gs + g.missingCandles, 0) || 0), 0)
+// ── Queue stats ──────────────────────────────────────────────────────────────
+const queueTotal = computed(() => fillQueue.value.reduce((s, q) => s + q.total, 0))
+const queueFilled = computed(() => fillQueue.value.reduce((s, q) => s + (q.status === 'done' ? q.total : q.filled), 0))
+const queuePct = computed(() => queueTotal.value > 0 ? Math.round(queueFilled.value / queueTotal.value * 100) : 0)
+
+// ── Calendar heatmap ─────────────────────────────────────────────────────────
+const calendarMonths = computed(() => {
+  if (!scanResult.value) return []
+
+  const tf = activeTf.value
+  const tfData = scanResult.value.timeframes?.[tf]
+  if (!tfData) return []
+
+  // If no candles at all, treat ALL trading days as gaps
+  const noData = (tfData.totalCandles || 0) === 0
+
+  // Build a set of gap dates from the gaps array
+  const gapDates = new Set()
+  if (!noData) {
+    for (const gap of (tfData.gaps || [])) {
+      const start = new Date(gap.gapStart)
+      const end = new Date(gap.gapEnd)
+      // Mark each day in the gap range
+      const d = new Date(start)
+      while (d <= end) {
+        gapDates.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`)
+        d.setDate(d.getDate() + 1)
+      }
+    }
+  }
+
+  // Generate 3 months of calendar data
+  const now = new Date()
+  const months = []
+  for (let m = 2; m >= 0; m--) {
+    const dt = new Date(now.getFullYear(), now.getMonth() - m, 1)
+    const year = dt.getFullYear()
+    const month = dt.getMonth()
+    const daysInMonth = new Date(year, month + 1, 0).getDate()
+    const firstDow = dt.getDay() // 0=Sun
+    const offset = firstDow === 0 ? 6 : firstDow - 1 // Mon-start
+
+    const label = dt.toLocaleString('en', { month: 'short', year: 'numeric' })
+    const days = []
+
+    // Blank cells for offset
+    for (let b = 0; b < offset; b++) days.push({ blank: true })
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = new Date(year, month, d)
+      const dow = date.getDay()
+      const isWeekend = dow === 0 || dow === 6
+      const key = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`
+      const isFuture = date > now
+
+      let status = 'ok'
+      if (isFuture) status = 'future'
+      else if (isWeekend) status = 'weekend'
+      else if (noData || gapDates.has(key)) status = 'gap'
+
+      days.push({ d, status, key, date })
+    }
+
+    months.push({ label, days })
+  }
+
+  return months
 })
 
-const totalFilled = computed(() => {
-  return Object.values(fillProgress).reduce((s, p) => s + (p.status === 'done' ? p.total : 0), 0)
-})
-
-const overallPct = computed(() => {
-  const t = totalMissing.value
-  return t > 0 ? Math.round(totalFilled.value / t * 100) : 0
-})
-
-function formatTime(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleString('en-IN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true })
+// ── TF gap counts for pills ─────────────────────────────────────────────────
+function tfGapCount(tf) {
+  return scanResult.value?.timeframes?.[tf]?.gapCount ?? 0
+}
+function tfHealth(tf) {
+  return scanResult.value?.timeframes?.[tf]?.healthPct ?? 100
+}
+function tfCandles(tf) {
+  return scanResult.value?.timeframes?.[tf]?.totalCandles ?? 0
+}
+function tfMissing(tf) {
+  return (scanResult.value?.timeframes?.[tf]?.gaps || []).reduce((s, g) => s + g.missingCandles, 0)
 }
 
-function formatDuration(mins) {
-  if (!mins) return '—'
-  if (mins < 60) return `${mins}m`
-  const h = Math.floor(mins / 60)
-  const m = mins % 60
-  return m > 0 ? `${h}h ${m}m` : `${h}h`
-}
-
-function gapStatus(tf) {
-  return fillProgress[tf]?.status || 'pending'
+// Helpers
+function queueStatusColor(s) {
+  if (s === 'done') return '#10b981'
+  if (s === 'filling') return '#3b82f6'
+  if (s === 'error') return '#ef4444'
+  return '#475569'
 }
 </script>
 
 <template>
-  <div class="p-4 max-w-7xl mx-auto">
+  <div class="gaps-page">
+
     <!-- Header -->
-    <div class="flex items-center justify-between mb-5">
+    <div class="gaps-header">
       <div>
-        <h1 class="text-2xl font-bold" style="color: var(--text)">Data Gaps</h1>
-        <p class="mt-1 text-xs" style="color: var(--muted)">Visual gap detection — see exactly where data is missing</p>
+        <h1 class="gaps-title">Data Gaps</h1>
+        <p class="gaps-subtitle">Calendar heatmap — see data completeness at a glance</p>
       </div>
-      <div class="flex items-center gap-2">
-        <SymbolSelector
-          :symbols="symbols"
-          v-model="selectedSymbol"
-          @change="smartScan()"
-          compact
-        />
-        <button @click="smartScan" :disabled="scanning"
-          class="rounded-md px-3 py-1.5 text-[11px] font-bold"
-          style="background: #2563eb; color: #fff">
-          {{ scanning ? '⟳ Scanning...' : '🔍 Smart Scan' }}
+      <div class="gaps-actions">
+        <SymbolSelector :symbols="symbols" v-model="selectedSymbol" @change="smartScan()" compact />
+        <button @click="smartScan" :disabled="scanning" class="btn btn-scan">
+          {{ scanning ? '⟳ Scanning…' : '🔍 Scan' }}
         </button>
-        <button @click="fillAll" :disabled="!scanResult?.totalGaps || fillingTf"
-          class="rounded-md px-3 py-1.5 text-[11px] font-bold"
-          style="background: #059669; color: #fff">
-          🔧 Auto-Fill All
+        <button @click="fixAll" :disabled="!scanResult?.totalGaps || fixingAll || !!fillingTf" class="btn btn-fix">
+          ⚡ Fix All Gaps
         </button>
       </div>
     </div>
 
-    <div v-if="scanResult" class="grid gap-4" style="grid-template-columns: 1fr 320px">
-      <!-- LEFT: Timeline + Gap Cards -->
-      <div>
-        <!-- Visual Timeline -->
-        <div class="rounded-xl p-4 mb-4" style="background: var(--card); border: 1px solid var(--border)">
-          <div class="flex justify-between items-center mb-3">
-            <h3 class="text-sm font-bold" style="color: var(--text)">📊 Gap Timeline</h3>
-            <span class="text-[10px]" style="color: var(--dim)">{{ scanResult.marketType }} market</span>
+    <div v-if="scanResult" class="gaps-grid">
+
+      <!-- ═══ LEFT COLUMN ═══ -->
+      <div class="gaps-left">
+
+        <!-- TF Pills -->
+        <div class="tf-pills">
+          <button v-for="tf in tfOrder" :key="tf"
+            @click="activeTf = tf"
+            :class="['tf-pill', { active: activeTf === tf }]">
+            {{ tf }}
+            <span v-if="tfGapCount(tf) > 0" class="tf-pill-badge">{{ tfGapCount(tf) }}</span>
+          </button>
+        </div>
+
+        <!-- Calendar Heatmap -->
+        <div class="cal-card">
+          <div class="cal-header">
+            <h3 class="cal-title">📅 {{ activeTf }} Data Heatmap</h3>
+            <div class="cal-legend">
+              <span class="cal-leg"><span class="cal-dot" style="background:rgba(16,185,129,0.4)"></span>Complete</span>
+              <span class="cal-leg"><span class="cal-dot" style="background:rgba(239,68,68,0.55)"></span>Missing</span>
+              <span class="cal-leg"><span class="cal-dot" style="background:rgba(99,102,241,0.08);border:1px solid #2d2b3d"></span>Weekend</span>
+              <span class="cal-leg"><span class="cal-dot" style="background:rgba(71,85,105,0.15)"></span>Future</span>
+            </div>
           </div>
 
-          <div v-for="tf in tfOrder" :key="tf" class="flex items-center gap-2 mb-1.5">
-            <div class="w-7 text-right font-extrabold text-[11px]" style="font-family: var(--mono); color: var(--text)">{{ tf }}</div>
-            <div class="flex-1 flex h-4 rounded overflow-hidden" style="background: var(--surface); border: 1px solid var(--border)">
-              <template v-if="scanResult.timeframes[tf]?.timeline?.length">
-                <div v-for="(seg, i) in scanResult.timeframes[tf].timeline" :key="i"
-                  :style="{
-                    width: seg.widthPct + '%',
-                    background: seg.type === 'ok' ? 'rgba(52,211,153,0.12)' : 'repeating-linear-gradient(45deg,rgba(239,83,80,0.2),rgba(239,83,80,0.2) 3px,rgba(239,83,80,0.05) 3px,rgba(239,83,80,0.05) 6px)',
-                    borderLeft: seg.type === 'gap' ? '2px solid var(--bear)' : 'none',
-                    borderRight: seg.type === 'gap' ? '2px solid var(--bear)' : 'none',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }"
-                  :title="seg.type === 'gap' ? `${formatTime(seg.start)} → ${formatTime(seg.end)}` : ''">
-                  <span v-if="seg.type === 'gap' && seg.widthPct > 6" class="text-[6px] font-extrabold" style="color: var(--bear)">GAP</span>
-                </div>
-              </template>
+          <!-- Months -->
+          <div class="cal-months">
+            <div v-for="m in calendarMonths" :key="m.label" class="cal-month">
+              <div class="cal-month-label">{{ m.label }}</div>
+              <div class="cal-day-names">
+                <span v-for="dn in ['M','T','W','T','F','S','S']" :key="dn" class="cal-dn">{{ dn }}</span>
+              </div>
+              <div class="cal-days">
+                <template v-for="(day, i) in m.days" :key="i">
+                  <div v-if="day.blank" class="cal-cell cal-blank"></div>
+                  <div v-else
+                    :class="['cal-cell', 'cal-' + day.status]"
+                    :title="day.status === 'gap' ? day.key + ' — MISSING' : day.status === 'weekend' ? day.key + ' (Weekend)' : day.key + ' — Complete'">
+                    <span v-if="day.status === 'gap'" class="cal-gap-mark">✕</span>
+                  </div>
+                </template>
+              </div>
             </div>
-            <span class="w-8 text-right text-[10px] font-extrabold"
-              :style="{ color: (scanResult.timeframes[tf]?.healthPct ?? 0) >= 95 ? 'var(--bull)' : (scanResult.timeframes[tf]?.healthPct ?? 0) >= 80 ? '#fbbf24' : 'var(--bear)' }">
-              {{ scanResult.timeframes[tf]?.healthPct ?? 0 }}%
-            </span>
-            <span class="w-12 text-right text-[9px] font-bold"
-              :style="{ color: (scanResult.timeframes[tf]?.gapCount ?? 0) > 0 ? 'var(--bear)' : 'var(--bull)' }">
-              {{ (scanResult.timeframes[tf]?.gapCount ?? 0) > 0 ? scanResult.timeframes[tf].gapCount + ' gap' + (scanResult.timeframes[tf].gapCount > 1 ? 's' : '') : '✓ OK' }}
-            </span>
+          </div>
+
+          <!-- Stats bar -->
+          <div class="cal-stats">
+            <div class="cal-stat">
+              <div class="cal-stat-label">Trading Days</div>
+              <div class="cal-stat-val">{{ calendarMonths.reduce((s,m) => s + m.days.filter(d => !d.blank && d.status !== 'weekend' && d.status !== 'future').length, 0) }}</div>
+            </div>
+            <div class="cal-stat">
+              <div class="cal-stat-label">Complete</div>
+              <div class="cal-stat-val" style="color:#10b981">{{ calendarMonths.reduce((s,m) => s + m.days.filter(d => d.status === 'ok').length, 0) }}</div>
+            </div>
+            <div class="cal-stat">
+              <div class="cal-stat-label">Gaps</div>
+              <div class="cal-stat-val" style="color:#ef4444">{{ tfGapCount(activeTf) }}</div>
+            </div>
+            <div class="cal-stat">
+              <div class="cal-stat-label">Health</div>
+              <div class="cal-stat-val" :style="{ color: tfHealth(activeTf) >= 95 ? '#10b981' : tfHealth(activeTf) >= 80 ? '#f59e0b' : '#ef4444' }">
+                {{ tfHealth(activeTf) }}%
+              </div>
+            </div>
           </div>
         </div>
 
-        <!-- Gap Cards -->
-        <div class="space-y-3">
-          <template v-for="tf in tfOrder" :key="'card-'+tf">
-            <template v-for="(gap, gi) in (scanResult.timeframes[tf]?.gaps || [])" :key="tf+'-'+gi">
-              <div class="rounded-xl p-3.5 relative overflow-hidden" style="background: var(--card)"
-                :style="{ border: gapStatus(tf) === 'done' ? '1px solid rgba(52,211,153,0.3)' : '1px solid var(--border)' }">
-
-                <!-- Top progress line -->
-                <div v-if="gapStatus(tf) !== 'pending'" class="absolute top-0 left-0 h-[3px] rounded-r transition-all duration-300"
-                  :style="{ width: (fillProgress[tf]?.pct || 0) + '%', background: gapStatus(tf) === 'done' ? '#34d399' : 'linear-gradient(90deg,#059669,#34d399)' }"></div>
-
-                <!-- Header -->
-                <div class="flex justify-between items-start mb-2">
-                  <div class="flex items-center gap-1.5">
-                    <span class="font-extrabold text-xs" style="font-family: var(--mono); color: var(--text)">{{ tf }}</span>
-                    <span class="rounded px-1.5 py-0.5 text-[8px] font-bold"
-                      :style="{ background: gap.gapType === 'trailing' ? 'rgba(239,83,80,0.15)' : 'rgba(251,191,36,0.15)', color: gap.gapType === 'trailing' ? 'var(--bear)' : '#fbbf24' }">
-                      {{ gap.gapType === 'trailing' ? 'Trailing' : 'Internal' }}
-                    </span>
-                    <!-- Status badge -->
-                    <span v-if="gapStatus(tf) === 'filling'" class="rounded px-1.5 py-0.5 text-[8px] font-bold animate-pulse"
-                      style="background: rgba(37,99,235,0.15); color: #2563eb">⟳ FILLING...</span>
-                    <span v-else-if="gapStatus(tf) === 'done'" class="rounded px-1.5 py-0.5 text-[8px] font-bold"
-                      style="background: rgba(52,211,153,0.15); color: #34d399">✓ FILLED</span>
-                    <span v-else-if="gapStatus(tf) === 'error'" class="rounded px-1.5 py-0.5 text-[8px] font-bold"
-                      style="background: rgba(239,83,80,0.15); color: var(--bear)">✕ FAILED</span>
-                  </div>
-                  <div v-if="gapStatus(tf) === 'pending'">
-                    <button @click="fillGap(tf)" :disabled="!!fillingTf"
-                      class="rounded px-2.5 py-1 text-[9px] font-bold" style="background: #059669; color: #fff">🔧 Fill</button>
-                  </div>
-                  <span v-else class="text-[10px] font-bold" :style="{ color: gapStatus(tf) === 'done' ? '#34d399' : '#2563eb' }">
-                    {{ fillProgress[tf]?.pct || 0 }}%
-                  </span>
-                </div>
-
-                <!-- Time range -->
-                <div class="text-[11px] mb-2" style="font-family: var(--mono); color: var(--text)">
-                  {{ formatTime(gap.gapStart) }} <span style="color: var(--dim)">→</span> {{ formatTime(gap.gapEnd) }}
-                </div>
-
-                <!-- Stats row -->
-                <div class="flex gap-4 mb-2">
-                  <div>
-                    <span class="text-[8px]" style="color: var(--dim)">Duration</span>
-                    <div class="text-xs font-bold" style="color: #fbbf24">{{ formatDuration(gap.durationMinutes) }}</div>
-                  </div>
-                  <div>
-                    <span class="text-[8px]" style="color: var(--dim)">Missing</span>
-                    <div class="text-xs font-bold" style="color: var(--bear)">{{ gap.missingCandles }}</div>
-                  </div>
-                  <div v-if="gapStatus(tf) === 'filling' || gapStatus(tf) === 'done'">
-                    <span class="text-[8px]" style="color: var(--dim)">Filled</span>
-                    <div class="text-xs font-bold" style="color: var(--bull)">{{ fillProgress[tf]?.filled || 0 }}</div>
-                  </div>
-                  <div v-if="gapStatus(tf) === 'filling' || gapStatus(tf) === 'done'">
-                    <span class="text-[8px]" style="color: var(--dim)">Time</span>
-                    <div class="text-xs font-bold" style="color: var(--muted)">{{ fillProgress[tf]?.elapsed || '—' }}</div>
-                  </div>
-                </div>
-
-                <!-- Progress bar (filling/done) -->
-                <div v-if="gapStatus(tf) !== 'pending'" class="rounded-full overflow-hidden" style="height: 5px; background: var(--surface)">
-                  <div class="h-full rounded-full transition-all duration-300"
-                    :style="{ width: (fillProgress[tf]?.pct || 0) + '%', background: gapStatus(tf) === 'done' ? '#34d399' : 'linear-gradient(90deg,#059669,#34d399)' }"></div>
-                </div>
-                <div v-if="gapStatus(tf) === 'filling'" class="flex justify-between mt-1">
-                  <span class="text-[8px]" style="color: var(--dim)">Fetching from exchange...</span>
-                  <span class="text-[8px]" style="color: var(--bull)">{{ fillProgress[tf]?.filled || 0 }}/{{ fillProgress[tf]?.total || 0 }}</span>
-                </div>
-                <div v-if="gapStatus(tf) === 'done'" class="text-right mt-1">
-                  <span class="text-[8px]" style="color: var(--bull)">Completed in {{ fillProgress[tf]?.elapsed }}</span>
-                </div>
-              </div>
-            </template>
-          </template>
-
-          <!-- No gaps -->
-          <div v-if="!scanResult.totalGaps" class="rounded-xl p-8 text-center" style="background: var(--card); border: 1px solid var(--border)">
-            <div class="text-3xl mb-2">✅</div>
-            <div class="text-sm font-bold" style="color: var(--bull)">All data complete!</div>
+        <!-- TF Summary Grid -->
+        <div class="tf-grid">
+          <div v-for="tf in tfOrder" :key="tf"
+            :class="['tf-card', { 'tf-card-ok': tfGapCount(tf) === 0 }]"
+            @click="activeTf = tf"
+            :style="{ borderColor: activeTf === tf ? '#6366f1' : tfGapCount(tf) > 0 ? 'rgba(239,68,68,0.25)' : '#2d2b3d' }">
+            <div class="tf-card-name">{{ tf }}</div>
+            <div class="tf-card-val" :style="{ color: tfGapCount(tf) > 0 ? '#ef4444' : '#10b981' }">
+              {{ tfGapCount(tf) > 0 ? tfGapCount(tf) : '✓' }}
+            </div>
+            <div class="tf-card-sub">{{ tfGapCount(tf) > 0 ? tfGapCount(tf) + ' gaps' : 'Complete' }}</div>
+            <div class="tf-card-bar">
+              <div class="tf-card-bar-fill" :style="{ width: tfHealth(tf) + '%', background: tfGapCount(tf) > 0 ? '#ef4444' : '#10b981' }"></div>
+            </div>
+            <div class="tf-card-health" :style="{ color: tfHealth(tf) >= 95 ? '#10b981' : '#f59e0b' }">{{ tfHealth(tf) }}%</div>
           </div>
         </div>
       </div>
 
-      <!-- RIGHT: Status Panel -->
-      <div>
-        <!-- Scan Summary -->
-        <div class="rounded-xl p-4 mb-3" style="background: var(--card); border: 1px solid var(--border)">
-          <h3 class="text-xs font-bold mb-3" style="color: var(--text)">📋 Scan Summary</h3>
-          <div class="grid grid-cols-2 gap-2 mb-3">
-            <div class="rounded-lg p-2 text-center" style="background: var(--surface)">
-              <div class="text-[8px] uppercase" style="color: var(--dim)">Gaps</div>
-              <div class="text-xl font-black" style="color: var(--bear)">{{ scanResult.totalGaps }}</div>
-            </div>
-            <div class="rounded-lg p-2 text-center" style="background: var(--surface)">
-              <div class="text-[8px] uppercase" style="color: var(--dim)">Missing</div>
-              <div class="text-xl font-black" style="color: #fbbf24">{{ totalMissing.toLocaleString() }}</div>
-            </div>
-            <div class="rounded-lg p-2 text-center" style="background: var(--surface)">
-              <div class="text-[8px] uppercase" style="color: var(--dim)">Filled</div>
-              <div class="text-xl font-black" style="color: var(--bull)">{{ totalFilled.toLocaleString() }}</div>
-            </div>
-            <div class="rounded-lg p-2 text-center" style="background: var(--surface)">
-              <div class="text-[8px] uppercase" style="color: var(--dim)">Remaining</div>
-              <div class="text-xl font-black" style="color: #fbbf24">{{ (totalMissing - totalFilled).toLocaleString() }}</div>
+      <!-- ═══ RIGHT COLUMN ═══ -->
+      <div class="gaps-right">
+
+        <!-- Gap Repair Panel -->
+        <div class="panel">
+          <h3 class="panel-title">🔧 Gap Repair</h3>
+
+          <!-- Queue items -->
+          <div v-if="fillQueue.length" class="repair-list">
+            <div v-for="q in fillQueue" :key="q.tf" class="repair-item"
+              :style="{ borderColor: q.status === 'done' ? 'rgba(16,185,129,0.3)' : q.status === 'filling' ? 'rgba(59,130,246,0.3)' : '#1a1825' }">
+              <span class="repair-tf">{{ q.tf }}</span>
+              <div class="repair-info">
+                <div class="repair-top">
+                  <span class="repair-count">{{ q.total }} candles</span>
+                  <span class="repair-status" :style="{ color: queueStatusColor(q.status) }">
+                    {{ q.status === 'done' ? '✓ FILLED' : q.status === 'filling' ? '⟳ ' + q.pct + '%' : q.status === 'error' ? '✕ FAILED' : 'Queued' }}
+                  </span>
+                </div>
+                <div class="repair-bar"><div class="repair-bar-fill" :style="{ width: q.pct + '%', background: q.status === 'done' ? '#10b981' : q.status === 'filling' ? 'linear-gradient(90deg,#2563eb,#3b82f6)' : '#334155' }"></div></div>
+              </div>
             </div>
           </div>
-          <div>
-            <div class="flex justify-between mb-1">
-              <span class="text-[9px]" style="color: var(--dim)">Overall Progress</span>
-              <span class="text-[9px] font-bold" style="color: var(--bull)">{{ overallPct }}%</span>
+
+          <!-- No queue -->
+          <div v-else class="repair-empty">
+            <p v-if="!scanResult?.totalGaps">✅ No gaps to repair!</p>
+            <p v-else>Click <b>Fix All Gaps</b> or select a timeframe to start.</p>
+          </div>
+
+          <!-- Overall progress -->
+          <div v-if="fillQueue.length" class="repair-overall">
+            <div class="repair-overall-top">
+              <span>Overall Progress</span>
+              <span class="repair-overall-count">{{ queueFilled.toLocaleString() }} / {{ queueTotal.toLocaleString() }}</span>
             </div>
-            <div class="rounded-full overflow-hidden" style="height: 6px; background: var(--surface)">
-              <div class="h-full rounded-full transition-all duration-500"
-                :style="{ width: overallPct + '%', background: 'linear-gradient(90deg,#059669,#34d399)' }"></div>
-            </div>
+            <div class="repair-bar repair-bar-lg"><div class="repair-bar-fill" :style="{ width: queuePct + '%', background: 'linear-gradient(90deg,#059669,#10b981)' }"></div></div>
+            <div class="repair-overall-pct">{{ queuePct }}%</div>
+          </div>
+
+          <!-- Per-TF fill buttons (when not using Fix All) -->
+          <div v-if="!fixingAll && scanResult?.totalGaps" class="repair-buttons">
+            <button v-for="tf in tfOrder.filter(t => tfGapCount(t) > 0)" :key="tf"
+              @click="fillGap(tf)" :disabled="!!fillingTf"
+              class="repair-btn">
+              {{ tf }} <span class="repair-btn-count">{{ tfMissing(tf) }}</span>
+            </button>
           </div>
         </div>
 
         <!-- Activity Log -->
-        <div class="rounded-xl p-4 mb-3" style="background: var(--card); border: 1px solid var(--border)">
-          <h3 class="text-xs font-bold mb-3" style="color: var(--text)">📝 Activity Log</h3>
-          <div class="space-y-1.5 max-h-80 overflow-y-auto">
-            <div v-for="(log, i) in activityLog" :key="i" class="flex gap-2 items-start">
-              <div class="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0" :style="{ background: log.color }"></div>
+        <div class="panel">
+          <h3 class="panel-title">📝 Activity</h3>
+          <div class="log-list">
+            <div v-for="(log, i) in activityLog" :key="i" class="log-item">
+              <span class="log-dot" :style="{ background: log.color }"></span>
               <div>
-                <div class="text-[10px] font-semibold" :style="{ color: log.color }">{{ log.msg }}</div>
-                <div class="text-[8px]" style="color: var(--dim)">{{ log.time }}</div>
+                <div class="log-msg" :style="{ color: log.color }">{{ log.msg }}</div>
+                <div class="log-time">{{ log.time }}</div>
               </div>
             </div>
-            <div v-if="!activityLog.length" class="text-[10px] text-center py-4" style="color: var(--dim)">No activity yet</div>
+            <div v-if="!activityLog.length" class="log-empty">No activity yet</div>
           </div>
         </div>
 
-        <!-- Market Hours -->
-        <div class="rounded-xl p-3" style="background: var(--card); border: 1px solid var(--border)">
-          <h3 class="text-[10px] font-bold mb-2" style="color: #7c3aed">📅 Market Hours</h3>
-          <div class="space-y-1">
-            <div class="flex justify-between text-[9px]">
-              <span class="font-bold" style="color: #fbbf24">Binance</span><span style="color: var(--muted)">24/7</span>
-            </div>
-            <div class="flex justify-between text-[9px]">
-              <span class="font-bold" style="color: var(--bull)">NSE</span><span style="color: var(--muted)">9:15-15:30 IST</span>
-            </div>
-            <div class="flex justify-between text-[9px]">
-              <span class="font-bold" style="color: #2563eb">Forex</span><span style="color: var(--muted)">Sun-Fri</span>
-            </div>
+        <!-- Market Info -->
+        <div class="panel panel-sm">
+          <div class="market-row">
+            <span class="market-label">Market</span>
+            <span class="market-val" style="color:#6366f1">{{ scanResult.marketType || 'Unknown' }}</span>
+          </div>
+          <div class="market-row" style="margin-top:6px">
+            <span class="market-label">Weekends</span>
+            <span class="market-val">Excluded from gaps</span>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Loading -->
-    <div v-if="!scanResult && scanning" class="text-center py-20">
-      <div class="text-sm" style="color: var(--dim)">⟳ Scanning for data gaps across all timeframes...</div>
+    <!-- Loading state -->
+    <div v-if="!scanResult && scanning" class="gaps-loading">
+      ⟳ Scanning for data gaps across all timeframes…
     </div>
   </div>
 </template>
+
+<style scoped>
+/* ── Page ────────────────────────────────────────────────────── */
+.gaps-page { padding: 16px; max-width: 1200px; margin: 0 auto; }
+
+/* ── Header ──────────────────────────────────────────────────── */
+.gaps-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.gaps-title { font-size: 22px; font-weight: 800; color: var(--text); margin: 0; }
+.gaps-subtitle { font-size: 12px; color: var(--dim); margin: 4px 0 0; }
+.gaps-actions { display: flex; gap: 8px; align-items: center; }
+
+.btn { padding: 6px 14px; border-radius: 8px; border: none; font-size: 11px; font-weight: 700; cursor: pointer; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-scan { background: #2563eb; color: #fff; }
+.btn-fix { background: #059669; color: #fff; }
+
+/* ── Grid ────────────────────────────────────────────────────── */
+.gaps-grid { display: grid; grid-template-columns: 1fr 300px; gap: 16px; }
+
+/* ── TF Pills ────────────────────────────────────────────────── */
+.tf-pills { display: flex; gap: 4px; margin-bottom: 14px; padding: 4px; background: var(--card); border-radius: 10px; border: 1px solid var(--border); width: fit-content; }
+.tf-pill { display: flex; align-items: center; gap: 4px; padding: 5px 16px; border-radius: 7px; border: none; background: transparent; color: var(--dim); font-size: 11px; font-weight: 700; cursor: pointer; font-family: var(--mono); }
+.tf-pill:hover { color: var(--text); background: var(--surface); }
+.tf-pill.active { background: #6366f1; color: #fff; }
+.tf-pill-badge { font-size: 8px; background: rgba(239,68,68,0.8); color: #fff; padding: 1px 5px; border-radius: 3px; font-weight: 800; }
+.tf-pill.active .tf-pill-badge { background: rgba(255,255,255,0.25); }
+
+/* ── Calendar Card ───────────────────────────────────────────── */
+.cal-card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 20px; }
+.cal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.cal-title { font-size: 13px; font-weight: 700; color: var(--text); margin: 0; }
+.cal-legend { display: flex; gap: 12px; align-items: center; }
+.cal-leg { display: flex; align-items: center; gap: 4px; font-size: 9px; color: var(--dim); }
+.cal-dot { width: 10px; height: 10px; border-radius: 2px; }
+
+.cal-months { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.cal-month-label { font-size: 11px; font-weight: 700; color: #94a3b8; text-align: center; margin-bottom: 8px; }
+.cal-day-names { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; margin-bottom: 4px; }
+.cal-dn { text-align: center; font-size: 8px; color: #475569; font-weight: 600; }
+.cal-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+
+.cal-cell {
+  width: 100%; aspect-ratio: 1; border-radius: 3px; display: flex;
+  align-items: center; justify-content: center; cursor: pointer;
+  transition: transform 0.1s; font-size: 7px; font-weight: 700;
+  min-height: 16px;
+}
+.cal-cell:hover { transform: scale(1.25); z-index: 5; }
+.cal-blank { background: transparent; cursor: default; }
+.cal-blank:hover { transform: none; }
+.cal-ok { background: rgba(16,185,129,0.35); }
+.cal-gap { background: rgba(239,68,68,0.5); border: 1px solid rgba(239,68,68,0.4); }
+.cal-weekend { background: rgba(99,102,241,0.06); }
+.cal-future { background: rgba(71,85,105,0.1); }
+.cal-gap-mark { color: #fca5a5; font-size: 8px; }
+
+/* Stats bar */
+.cal-stats { margin-top: 16px; display: flex; gap: 12px; justify-content: center; }
+.cal-stat { text-align: center; padding: 8px 16px; background: var(--surface); border-radius: 8px; min-width: 80px; }
+.cal-stat-label { font-size: 8px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+.cal-stat-val { font-size: 18px; font-weight: 900; color: var(--text); }
+
+/* ── TF Summary Grid ─────────────────────────────────────────── */
+.tf-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-top: 12px; }
+.tf-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px; text-align: center; cursor: pointer; transition: border-color 0.15s;
+}
+.tf-card:hover { border-color: #6366f1; }
+.tf-card-name { font-size: 12px; font-weight: 800; color: var(--text); font-family: var(--mono); }
+.tf-card-val { font-size: 18px; font-weight: 900; margin: 4px 0; }
+.tf-card-sub { font-size: 8px; color: var(--dim); }
+.tf-card-bar { margin-top: 6px; height: 3px; border-radius: 2px; background: var(--surface); overflow: hidden; }
+.tf-card-bar-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+.tf-card-health { font-size: 8px; font-weight: 700; margin-top: 3px; }
+
+/* ── Right panel ─────────────────────────────────────────────── */
+.panel { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 12px; }
+.panel-sm { padding: 12px; }
+.panel-title { font-size: 12px; font-weight: 700; color: var(--text); margin: 0 0 12px; }
+
+/* Repair list */
+.repair-list { display: flex; flex-direction: column; gap: 6px; }
+.repair-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 8px; background: var(--surface);
+  border: 1px solid transparent; transition: border-color 0.2s;
+}
+.repair-tf { font-size: 11px; font-weight: 800; color: var(--text); font-family: var(--mono); width: 24px; flex-shrink: 0; }
+.repair-info { flex: 1; }
+.repair-top { display: flex; justify-content: space-between; margin-bottom: 3px; }
+.repair-count { font-size: 9px; color: #94a3b8; }
+.repair-status { font-size: 9px; font-weight: 700; }
+.repair-bar { height: 3px; border-radius: 2px; background: var(--surface); overflow: hidden; }
+.repair-bar-lg { height: 6px; border-radius: 3px; }
+.repair-bar-fill { height: 100%; border-radius: inherit; transition: width 0.3s; }
+.repair-empty { font-size: 11px; color: var(--dim); text-align: center; padding: 16px 0; }
+.repair-overall { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.repair-overall-top { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 10px; color: #94a3b8; }
+.repair-overall-count { font-weight: 800; color: #10b981; }
+.repair-overall-pct { text-align: right; margin-top: 3px; font-size: 9px; color: #10b981; font-weight: 700; }
+
+.repair-buttons { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.repair-btn {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font-size: 10px;
+  font-weight: 700; cursor: pointer; font-family: var(--mono);
+}
+.repair-btn:hover { border-color: #6366f1; }
+.repair-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.repair-btn-count { font-size: 8px; background: rgba(239,68,68,0.2); color: #ef4444; padding: 1px 4px; border-radius: 3px; }
+
+/* Log */
+.log-list { max-height: 200px; overflow-y: auto; }
+.log-list::-webkit-scrollbar { width: 3px; }
+.log-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.log-item { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
+.log-dot { width: 5px; height: 5px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+.log-msg { font-size: 10px; font-weight: 600; }
+.log-time { font-size: 8px; color: var(--dim); }
+.log-empty { font-size: 10px; text-align: center; padding: 16px; color: var(--dim); }
+
+/* Market info */
+.market-row { display: flex; justify-content: space-between; align-items: center; font-size: 10px; }
+.market-label { font-weight: 700; color: #94a3b8; }
+.market-val { font-weight: 700; }
+
+/* Loading */
+.gaps-loading { text-align: center; padding: 60px; font-size: 13px; color: var(--dim); }
+</style>

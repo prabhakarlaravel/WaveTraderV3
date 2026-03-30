@@ -73,12 +73,26 @@ class GapDetectionService
         $totalCandles = $candles->count();
 
         if ($totalCandles < 2) {
+            // If zero data, report as 1 big gap covering the full expected range
+            $noDataGapCount = $totalCandles === 0 ? 1 : 0;
+            $noDataGaps = [];
+            if ($totalCandles === 0) {
+                $rangeStart = Carbon::now()->subMonths(3)->startOfDay();
+                $rangeEnd = Carbon::now();
+                $noDataGaps[] = [
+                    'gapType' => 'no_data',
+                    'gapStart' => $rangeStart->toIso8601String(),
+                    'gapEnd' => $rangeEnd->toIso8601String(),
+                    'durationMinutes' => (int) abs($rangeStart->diffInMinutes($rangeEnd)),
+                    'missingCandles' => 0, // unknown
+                ];
+            }
             return [
                 'timeframe' => $tf,
                 'totalCandles' => $totalCandles,
-                'gaps' => [],
-                'gapCount' => 0,
-                'healthPct' => 0,
+                'gaps' => $noDataGaps,
+                'gapCount' => $noDataGapCount,
+                'healthPct' => $totalCandles === 0 ? 0 : 0,
                 'timeline' => [],
             ];
         }
@@ -198,13 +212,15 @@ class GapDetectionService
      */
     private function isMarketClosed(Carbon $from, Carbon $to, string $exchange): bool
     {
+        $ex = strtoupper($exchange);
+
         // Crypto markets are 24/7 — no expected closures
-        if (in_array($exchange, ['binance'])) {
+        if ($ex === 'BINANCE') {
             return false;
         }
 
         // Forex: closed Sat + most of Sunday
-        if (in_array($exchange, ['oanda'])) {
+        if ($ex === 'OANDA') {
             $fromDay = $from->dayOfWeek;
             if ($fromDay === 6) {
                 return true;
@@ -217,8 +233,8 @@ class GapDetectionService
             } // Sunday before 10pm
         }
 
-        // NSE: only open Mon-Fri 3:45-10:00 UTC (9:15-15:30 IST)
-        if (in_array($exchange, ['zerodha'])) {
+        // NSE/BSE: only open Mon-Fri 3:45-10:00 UTC (9:15-15:30 IST)
+        if (in_array($ex, ['ZERODHA', 'NSE', 'BSE', 'NFO', 'MCX'])) {
             $fromDay = $from->dayOfWeek;
             if ($fromDay === 0 || $fromDay === 6) {
                 return true;
@@ -461,22 +477,23 @@ class GapDetectionService
 
     private function getMarketType(string $exchange): string
     {
-        return match ($exchange) {
-            'binance' => '24/7',
-            'zerodha' => 'NSE Session',
-            'oanda' => 'Forex',
+        return match (strtoupper($exchange)) {
+            'BINANCE' => '24/7',
+            'ZERODHA', 'NSE', 'BSE', 'NFO', 'MCX' => 'NSE Session',
+            'OANDA' => 'Forex',
             default => 'Unknown',
         };
     }
 
     private function resolveDataSource(string $exchange): DataSourceInterface
     {
-        return match ($exchange) {
-            'binance' => new BinanceDataSource(),
-            'zerodha' => new ZerodhaDataSource(),
-            'oanda' => new OANDADataSource(),
-            'yahoo' => new YahooDataSource(),
-            default => throw new \RuntimeException("Unsupported exchange: {$exchange}"),
+        return match (strtoupper($exchange)) {
+            'BINANCE'  => new BinanceDataSource(),
+            'ZERODHA'  => new ZerodhaDataSource(),
+            'NSE', 'BSE', 'NFO', 'MCX' => new ZerodhaDataSource(),
+            'OANDA'    => new OANDADataSource(),
+            'YAHOO'    => new YahooDataSource(),
+            default    => throw new \RuntimeException("Unsupported exchange: {$exchange}"),
         };
     }
 }
