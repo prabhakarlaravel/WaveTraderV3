@@ -207,6 +207,9 @@ class ZerodhaDataSource implements DataSourceInterface
         return collect();
     }
 
+    // Cached per-exchange instrument CSV (downloaded once per process lifetime)
+    private array $instrumentCsvCache = [];
+
     /**
      * Resolve instrument token from trading symbol.
      * Zerodha requires instrument_token (numeric ID) for historical data API.
@@ -217,44 +220,63 @@ class ZerodhaDataSource implements DataSourceInterface
             return $this->instrumentTokens[$symbol];
         }
 
-        // Check if stored in settings
-        $cached = Setting::get("zerodha_instrument_{$symbol}");
+        // Check if stored in settings (DB cache)
+        $settingsKey = 'zerodha_instrument_' . str_replace(' ', '_', $symbol);
+        $cached = Setting::get($settingsKey);
         if ($cached) {
             $this->instrumentTokens[$symbol] = $cached;
 
             return $cached;
         }
 
-        // Fetch from instruments API
-        $response = Http::timeout(30)
-            ->withHeaders([
-                'X-Kite-Version' => '3',
-                'Authorization' => "token {$apiKey}:{$accessToken}",
-            ])
-            ->get(self::BASE_URL . '/instruments', [
-                'exchange' => $this->guessExchange($symbol),
-            ]);
+        $exchange = $this->guessExchange($symbol);
 
-        if (! $response->successful()) {
-            Log::error("Zerodha: failed to fetch instruments — {$response->status()}");
+        // Download instruments CSV once per exchange, then cache in memory
+        if (! isset($this->instrumentCsvCache[$exchange])) {
+            Log::info("Zerodha: downloading {$exchange} instruments list...");
 
-            return null;
-        }
+            $response = Http::timeout(60)
+                ->withHeaders([
+                    'X-Kite-Version' => '3',
+                    'Authorization' => "token {$apiKey}:{$accessToken}",
+                ])
+                ->get(self::BASE_URL . '/instruments', ['exchange' => $exchange]);
 
-        // Parse CSV response
-        $lines = explode("\n", $response->body());
-        foreach ($lines as $line) {
-            $cols = str_getcsv($line);
-            if (isset($cols[2]) && strtoupper($cols[2]) === strtoupper($symbol)) {
-                $token = $cols[0]; // instrument_token is first column
-                $this->instrumentTokens[$symbol] = $token;
-                Setting::set("zerodha_instrument_{$symbol}", $token, 'exchange');
+            if (! $response->successful()) {
+                Log::error("Zerodha: failed to fetch {$exchange} instruments — {$response->status()}");
 
-                return $token;
+                return null;
             }
+
+            // Parse entire CSV into a lookup map: tradingsymbol → instrument_token
+            $map = [];
+            $lines = explode("\n", $response->body());
+            foreach ($lines as $line) {
+                $cols = str_getcsv($line);
+                // CSV columns: instrument_token, exchange_token, tradingsymbol, name, ...
+                if (isset($cols[2]) && $cols[0] !== 'instrument_token') {
+                    $map[strtoupper($cols[2])] = $cols[0];
+                }
+            }
+
+            $this->instrumentCsvCache[$exchange] = $map;
+            Log::info("Zerodha: cached " . count($map) . " {$exchange} instruments");
+
+            usleep(self::RATE_LIMIT_DELAY_MS * 1000);
         }
 
-        Log::error("Zerodha: instrument token not found for {$symbol}");
+        $lookup = $this->instrumentCsvCache[$exchange];
+        $token = $lookup[strtoupper($symbol)] ?? null;
+
+        if ($token) {
+            $this->instrumentTokens[$symbol] = $token;
+            Setting::set($settingsKey, $token, 'exchange');
+            Log::info("Zerodha: resolved {$symbol} → instrument_token {$token}");
+
+            return $token;
+        }
+
+        Log::error("Zerodha: instrument token not found for {$symbol} in {$exchange} instruments");
 
         return null;
     }
@@ -262,8 +284,12 @@ class ZerodhaDataSource implements DataSourceInterface
     private function guessExchange(string $symbol): string
     {
         $symbol = strtoupper($symbol);
+
         if (str_contains($symbol, 'FUT') || str_contains($symbol, 'CE') || str_contains($symbol, 'PE')) {
             return 'NFO';
+        }
+        if (in_array($symbol, ['SENSEX', 'BANKEX'], true)) {
+            return 'BSE';
         }
         if (str_contains($symbol, 'GOLD') || str_contains($symbol, 'SILVER') || str_contains($symbol, 'CRUDE')) {
             return 'MCX';

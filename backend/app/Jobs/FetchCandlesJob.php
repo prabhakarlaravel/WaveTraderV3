@@ -97,12 +97,13 @@ class FetchCandlesJob implements ShouldQueue
 
     private function resolveDataSource(string $exchange): DataSourceInterface
     {
-        return match ($exchange) {
-            'binance' => new BinanceDataSource(),
-            'zerodha' => new ZerodhaDataSource(),
-            'oanda' => new OANDADataSource(),
-            'yahoo' => new YahooDataSource(),
-            default => throw new \RuntimeException("Unsupported exchange: {$exchange}"),
+        return match (strtoupper($exchange)) {
+            'BINANCE'  => new BinanceDataSource(),
+            'ZERODHA'  => new ZerodhaDataSource(),
+            'NSE', 'BSE', 'NFO', 'MCX' => new ZerodhaDataSource(),
+            'OANDA'    => new OANDADataSource(),
+            'YAHOO'    => new YahooDataSource(),
+            default    => throw new \RuntimeException("Unsupported exchange: {$exchange}"),
         };
     }
 }
