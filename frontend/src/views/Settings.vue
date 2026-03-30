@@ -108,7 +108,26 @@ onMounted(async () => {
   loadValues()
   checkZerodhaRedirect()
   fetchZerodhaBalance()
+  autoCheckConnections()
 })
+
+// Auto-check connection status for exchanges that have credentials saved
+async function autoCheckConnections() {
+  for (const ex of exchanges) {
+    const hasCredentials = ex.fields.some(f => {
+      const val = exchangeValues[f.key]
+      return val && val.length > 0 && val !== f.label
+    })
+    if (hasCredentials) {
+      // Test in background — don't block UI
+      store.testConnection(ex.id).then(result => {
+        ex.status = result
+      }).catch(() => {
+        // Silent fail — stays "Offline"
+      })
+    }
+  }
+}
 
 function loadValues() {
   for (const ex of exchanges) {
@@ -188,7 +207,16 @@ async function fetchZerodhaBalance() {
     const { data } = await axios.get('/api/v1/settings/zerodha/balance')
     zerodha.hasToken = data.has_token ?? false; zerodha.expired = data.expired ?? false
     zerodha.equity = data.equity ?? null; zerodha.commodity = data.commodity ?? null
-    if (data.expired) { zerodha.tokenMsg = 'Session expired — regenerate token.'; zerodha.tokenMsgType = 'error' }
+    // Set Zerodha exchange card status based on balance result
+    const zrEx = exchanges.find(e => e.id === 'zerodha')
+    if (zrEx) {
+      if (data.success) {
+        zrEx.status = { success: true, message: 'Connected' }
+      } else if (data.expired) {
+        zrEx.status = { success: false, message: 'Token expired' }
+        zerodha.tokenMsg = 'Session expired — regenerate token.'; zerodha.tokenMsgType = 'error'
+      }
+    }
   } catch { zerodha.hasToken = false }
   finally { zerodha.balanceLoading = false }
 }
