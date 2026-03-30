@@ -86,13 +86,19 @@ class GapDetectionService
                     'durationMinutes' => (int) abs($rangeStart->diffInMinutes($rangeEnd)),
                     'missingCandles' => 0, // unknown
                 ];
+
+                // Persist the gap record so the fill endpoint can find it
+                DataGap::updateOrCreate(
+                    ['symbol_id' => $symbol->id, 'timeframe' => $tf, 'gap_start' => $rangeStart],
+                    ['gap_end' => $rangeEnd, 'filled_at' => null]
+                );
             }
             return [
                 'timeframe' => $tf,
                 'totalCandles' => $totalCandles,
                 'gaps' => $noDataGaps,
                 'gapCount' => $noDataGapCount,
-                'healthPct' => $totalCandles === 0 ? 0 : 0,
+                'healthPct' => 0,
                 'timeline' => [],
             ];
         }
@@ -281,23 +287,51 @@ class GapDetectionService
 
             Log::info("Filling gap: {$symbol->ticker} [{$timeframe}] {$from} → {$to}");
 
-            // Strategy: always fetch 1M from exchange, then aggregate
-            $fetched = $this->fetchAndStore($symbol, '1M', $from, $to);
-            $totalFetched += $fetched;
+            if ($timeframe === '1M') {
+                // For 1M: fetch directly from exchange
+                $fetched = $this->fetchAndStore($symbol, '1M', $from, $to);
+                $totalFetched += $fetched;
 
-            // If this is a higher TF gap, aggregate from the fresh 1M data
-            if ($timeframe !== '1M' && $fetched > 0) {
-                $aggregated = $this->aggregateTimeframe($symbol->id, $timeframe, $from, $to);
-                $totalFetched += $aggregated;
-                Log::info("Aggregated {$aggregated} {$timeframe} candles from 1M for {$symbol->ticker}");
-            }
-
-            // Only mark as filled if we actually got candles
-            if ($fetched > 0) {
-                $gap->update(['filled_at' => Carbon::now()]);
-                Log::info("Gap filled: {$fetched} candles for {$symbol->ticker} [{$timeframe}]");
+                if ($fetched > 0) {
+                    $gap->update(['filled_at' => Carbon::now()]);
+                    Log::info("Gap filled: {$fetched} 1M candles for {$symbol->ticker}");
+                } else {
+                    Log::warning("Gap fill returned 0 candles for {$symbol->ticker} [1M] {$from} → {$to}");
+                }
             } else {
-                Log::warning("Gap fill returned 0 candles for {$symbol->ticker} [{$timeframe}] {$from} → {$to}");
+                // For higher TFs (5M, 15M, 1H, 4H, 1D): try aggregating from existing 1M data first
+                $existing1M = Candle::where('symbol_id', $symbol->id)
+                    ->where('timeframe', '1M')
+                    ->whereBetween('timestamp', [$from, $to])
+                    ->count();
+
+                $fetched = 0;
+                if ($existing1M > 0) {
+                    // 1M data exists — aggregate directly without fetching from exchange
+                    Log::info("Found {$existing1M} existing 1M candles — aggregating to {$timeframe}");
+                    $aggregated = $this->aggregateTimeframe($symbol->id, $timeframe, $from, $to);
+                    $fetched = $aggregated;
+                    $totalFetched += $aggregated;
+                    Log::info("Aggregated {$aggregated} {$timeframe} candles from existing 1M for {$symbol->ticker}");
+                } else {
+                    // No 1M data — fetch from exchange first, then aggregate
+                    $rawFetched = $this->fetchAndStore($symbol, '1M', $from, $to);
+                    $totalFetched += $rawFetched;
+
+                    if ($rawFetched > 0) {
+                        $aggregated = $this->aggregateTimeframe($symbol->id, $timeframe, $from, $to);
+                        $totalFetched += $aggregated;
+                        $fetched = $rawFetched + $aggregated;
+                        Log::info("Fetched {$rawFetched} 1M + aggregated {$aggregated} {$timeframe} candles for {$symbol->ticker}");
+                    }
+                }
+
+                if ($fetched > 0) {
+                    $gap->update(['filled_at' => Carbon::now()]);
+                    Log::info("Gap filled: {$fetched} candles for {$symbol->ticker} [{$timeframe}]");
+                } else {
+                    Log::warning("Gap fill returned 0 candles for {$symbol->ticker} [{$timeframe}] {$from} → {$to}");
+                }
             }
         }
 
