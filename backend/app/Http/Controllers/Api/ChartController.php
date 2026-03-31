@@ -172,6 +172,7 @@ class ChartController extends Controller
             'fvgs' => $fvgResult->overlays['fvgs'] ?? [],
             'swings' => $swings,
             'waveLabels' => $waveLabels,
+            'subLegs' => $ewResult->overlays['subLegs'] ?? [],
             'bos' => $msResult->overlays['bos'] ?? [],
             'vwap' => $vwapResult->overlays['vwap'] ?? [],
             'patterns' => $paResult->overlays['patterns'] ?? [],

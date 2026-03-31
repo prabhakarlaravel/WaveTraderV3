@@ -35,10 +35,14 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     const chartWrapper = container.children[0]
     if (!chartWrapper) return null
 
-    if (svgOverlay.value && svgOverlay.value.parentElement === chartWrapper) return svgOverlay.value
+    if (svgOverlay.value && svgOverlay.value.parentElement === chartWrapper && svgOverlay.value.isConnected) return svgOverlay.value
 
-    // Remove old SVGs
+    // Reset stale reference
+    svgOverlay.value = null
+
+    // Remove old SVGs from both container and wrapper
     container.querySelectorAll('.svg-chart-overlay').forEach(el => el.remove())
+    chartWrapper.querySelectorAll('.svg-chart-overlay').forEach(el => el.remove())
 
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
     svg.classList.add('svg-chart-overlay')
@@ -69,6 +73,7 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     const container = containerEl
 
     const svg = ensureSvgOverlay(container)
+    if (!svg) return
     const w = container.clientWidth
     const h = container.clientHeight
     svg.setAttribute('viewBox', `0 0 ${w} ${h}`)
@@ -90,7 +95,8 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     if (toggles.ob) renderOTE(overlays.oteZones || [], svg, w)
     if (toggles.ob) renderLiquidityPools(overlays.liquidityPools || [], svg, w)
     if (toggles.bos) renderBos(overlays.bos || [], svg)
-    if (toggles.waves) renderWaveLabels(overlays.waveLabels || [], svg)
+    if (toggles.legs) renderSubLegs(overlays.subLegs || [], svg)
+    if (toggles.waves) renderWaveLabels(overlays.waveLabels || [], svg, false)
 
     // Projectile replaces the simpler wave targets + time estimate when enabled
     if (toggles.projectile) {
@@ -284,7 +290,7 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     }
   }
 
-  // ── Wave labels with circles + connection lines ──
+  // ── Main wave labels — dashed lines + circle node labels ──
   function renderWaveLabels(waveLabels, svg) {
     if (waveLabels.length < 2) return
 
@@ -297,30 +303,78 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
         points.push({ ...w, wx, wy })
       }
     }
-
     if (points.length < 2) return
 
-    // Connection line
-    const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.wx},${p.wy}`).join(' ')
-    addPath(svg, linePath, { fill: 'none', stroke: 'rgba(139,92,246,0.5)', strokeWidth: '1.5', strokeDasharray: '6 3' })
+    const total = points.length
 
-    // Labels
-    for (const p of points) {
+    // Dashed connection lines between consecutive main wave pivots
+    for (let i = 0; i < total - 1; i++) {
+      const p1 = points[i]
+      const p2 = points[i + 1]
+      const isCorr = p2.isCorrection
+      const isLast = i === total - 2
+      const color = isLast ? '#34d399' : (isCorr ? '#f59e0b' : '#8b5cf6')
+
+      // Fade older segments
+      const age = i / Math.max(total - 2, 1)
+      const opacity = isLast ? 0.8 : (0.3 + age * 0.4)
+
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+      line.setAttribute('x1', p1.wx)
+      line.setAttribute('y1', p1.wy)
+      line.setAttribute('x2', p2.wx)
+      line.setAttribute('y2', p2.wy)
+      line.setAttribute('stroke', color)
+      line.setAttribute('stroke-width', isLast ? '2.4' : '2.2')
+      line.setAttribute('stroke-dasharray', '10 5')
+      line.setAttribute('opacity', opacity.toFixed(2))
+      line.setAttribute('stroke-linecap', 'round')
+      if (isLast) {
+        const anim = document.createElementNS('http://www.w3.org/2000/svg', 'animate')
+        anim.setAttribute('attributeName', 'opacity')
+        anim.setAttribute('values', '0.5;0.95;0.5')
+        anim.setAttribute('dur', '2s')
+        anim.setAttribute('repeatCount', 'indefinite')
+        line.appendChild(anim)
+      }
+      svg.appendChild(line)
+    }
+
+    // Circle node labels at each pivot
+    for (let i = 0; i < total; i++) {
+      const p = points[i]
       const isAbove = p.type === 'high'
-      const labelY = isAbove ? p.wy - 18 : p.wy + 18
       const isCorr = p.isCorrection
-      const color = isCorr ? '#f59e0b' : '#8b5cf6'
+      const isLast = i === total - 1
+      const color = isLast ? '#34d399' : (isCorr ? '#f59e0b' : '#8b5cf6')
+      const age = i / Math.max(total - 1, 1)
+
+      // Only show labels for recent pivots (last 10), faded dots for older
+      const recentStart = Math.max(0, total - 10)
+      if (i < recentStart) {
+        const dotOpacity = 0.12 + age * 0.2
+        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+        dot.setAttribute('cx', p.wx)
+        dot.setAttribute('cy', p.wy)
+        dot.setAttribute('r', (1.5 + age * 1).toFixed(1))
+        dot.setAttribute('fill', color)
+        dot.setAttribute('opacity', dotOpacity.toFixed(2))
+        svg.appendChild(dot)
+        continue
+      }
+
+      const labelY = isAbove ? p.wy - 18 : p.wy + 18
 
       // Stem line
       addLine(svg, p.wx, p.wy, p.wx, isAbove ? labelY + 8 : labelY - 8, {
-        stroke: color, strokeWidth: '0.8', opacity: '0.5',
+        stroke: color, strokeWidth: '0.7', opacity: '0.4',
       })
 
       // Circle background
       const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
       circle.setAttribute('cx', p.wx)
       circle.setAttribute('cy', labelY)
-      circle.setAttribute('r', '10')
+      circle.setAttribute('r', '11')
       circle.setAttribute('fill', '#0c1221')
       circle.setAttribute('stroke', color)
       circle.setAttribute('stroke-width', '1.5')
@@ -329,18 +383,145 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
       // Label text
       const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
       text.setAttribute('x', p.wx)
-      text.setAttribute('y', labelY + 4)
+      text.setAttribute('y', labelY + 4.5)
       text.setAttribute('text-anchor', 'middle')
       text.setAttribute('fill', color)
-      text.setAttribute('font-size', '11')
-      text.setAttribute('font-weight', '700')
+      text.setAttribute('font-size', '12')
+      text.setAttribute('font-weight', '800')
+      text.setAttribute('font-family', "'JetBrains Mono', monospace")
+      text.textContent = p.label
+      svg.appendChild(text)
+
+      // Pulse on last pivot
+      if (isLast) {
+        const pulse = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+        pulse.setAttribute('cx', p.wx)
+        pulse.setAttribute('cy', p.wy)
+        pulse.setAttribute('r', '4.5')
+        pulse.setAttribute('fill', '#34d399')
+        pulse.setAttribute('opacity', '0.2')
+        const animR = document.createElementNS('http://www.w3.org/2000/svg', 'animate')
+        animR.setAttribute('attributeName', 'r')
+        animR.setAttribute('values', '4.5;10;4.5')
+        animR.setAttribute('dur', '2s')
+        animR.setAttribute('repeatCount', 'indefinite')
+        pulse.appendChild(animR)
+        svg.appendChild(pulse)
+      }
+    }
+  }
+
+  // ── Sub-Legs (lower degree pivots within each main wave) ──
+  function renderSubLegs(subLegs, svg) {
+    if (!subLegs || subLegs.length < 2) return
+
+    // Build pixel points
+    const points = []
+    for (const sl of subLegs) {
+      const sx = getX(toUnix(sl.timestamp))
+      const sy = getY(sl.price)
+      if (sx !== null && sy !== null) {
+        points.push({ ...sl, sx, sy })
+      }
+    }
+    if (points.length < 2) return
+
+    // Group sub-legs by parentWave for connecting lines
+    const groups = {}
+    for (const p of points) {
+      const key = p.parentWave || '_'
+      if (!groups[key]) groups[key] = []
+      groups[key].push(p)
+    }
+
+    // Ensure glow filter for sub-legs
+    if (!svg.querySelector('#subLegGlow')) {
+      const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs')
+      defs.id = 'subLegDefs'
+      const filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter')
+      filter.setAttribute('id', 'subLegGlow')
+      const blur = document.createElementNS('http://www.w3.org/2000/svg', 'feGaussianBlur')
+      blur.setAttribute('stdDeviation', '1.5')
+      blur.setAttribute('result', 'b')
+      filter.appendChild(blur)
+      const merge = document.createElementNS('http://www.w3.org/2000/svg', 'feMerge')
+      const mn1 = document.createElementNS('http://www.w3.org/2000/svg', 'feMergeNode')
+      mn1.setAttribute('in', 'b')
+      merge.appendChild(mn1)
+      const mn2 = document.createElementNS('http://www.w3.org/2000/svg', 'feMergeNode')
+      mn2.setAttribute('in', 'SourceGraphic')
+      merge.appendChild(mn2)
+      filter.appendChild(merge)
+      defs.appendChild(filter)
+      svg.insertBefore(defs, svg.firstChild)
+    }
+
+    const subLegColor = '#22d3ee' // Cyan for sub-legs
+
+    // Draw dotted connection lines within each parent wave group
+    for (const key of Object.keys(groups)) {
+      const gPts = groups[key]
+      if (gPts.length < 2) continue
+
+      for (let i = 0; i < gPts.length - 1; i++) {
+        const p1 = gPts[i]
+        const p2 = gPts[i + 1]
+        const isActive = key === groups[Object.keys(groups).pop()] && i === gPts.length - 2
+
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+        line.setAttribute('x1', p1.sx)
+        line.setAttribute('y1', p1.sy)
+        line.setAttribute('x2', p2.sx)
+        line.setAttribute('y2', p2.sy)
+        line.setAttribute('stroke', isActive ? '#34d399' : subLegColor)
+        line.setAttribute('stroke-width', isActive ? '2' : '1.8')
+        line.setAttribute('stroke-dasharray', '3 4')
+        line.setAttribute('opacity', isActive ? '0.9' : '0.75')
+        line.setAttribute('stroke-linecap', 'round')
+        line.setAttribute('filter', 'url(#subLegGlow)')
+        svg.appendChild(line)
+      }
+    }
+
+    // Draw circle node labels for each sub-leg pivot
+    const totalPoints = points.length
+    for (let i = 0; i < totalPoints; i++) {
+      const p = points[i]
+      const isAbove = p.type === 'high'
+      const isLast = i === totalPoints - 1
+      const isActive = isLast || (p.parentWave === points[totalPoints - 1]?.parentWave)
+      const color = isActive && p.parentWave === points[totalPoints - 1]?.parentWave ? '#34d399' : subLegColor
+      const labelY = isAbove ? p.sy - 16 : p.sy + 16
+
+      // Stem line
+      addLine(svg, p.sx, p.sy, p.sx, isAbove ? labelY + 6 : labelY - 6, {
+        stroke: color, strokeWidth: '0.6', opacity: '0.5',
+      })
+
+      // Circle background (smaller than main wave labels)
+      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+      circle.setAttribute('cx', p.sx)
+      circle.setAttribute('cy', labelY)
+      circle.setAttribute('r', '8')
+      circle.setAttribute('fill', '#0c1221')
+      circle.setAttribute('stroke', color)
+      circle.setAttribute('stroke-width', '1.2')
+      svg.appendChild(circle)
+
+      // Label text
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      text.setAttribute('x', p.sx)
+      text.setAttribute('y', labelY + 3.5)
+      text.setAttribute('text-anchor', 'middle')
+      text.setAttribute('fill', color)
+      text.setAttribute('font-size', '9')
+      text.setAttribute('font-weight', '800')
       text.setAttribute('font-family', "'JetBrains Mono', monospace")
       text.textContent = p.label
       svg.appendChild(text)
     }
   }
 
-  // ── Signal markers on candle series ──
   // ── OTE Zones (0.618-0.786 Fibonacci) ──
   function renderOTE(oteZones, svg, chartWidth) {
     for (const ote of oteZones) {

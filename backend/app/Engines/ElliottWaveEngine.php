@@ -66,6 +66,9 @@ class ElliottWaveEngine implements EngineInterface
         // Step 8: Estimate wave completion time
         $timeEstimate = $this->estimateWaveTime($waveCounts, $timeframe);
 
+        // Step 9: Detect sub-legs within each main wave segment
+        $subLegs = $this->detectSubLegs($waveCounts, $candles, $degree);
+
         return new EngineResult(
             engine: 'elliott_wave',
             symbol: $symbol,
@@ -73,6 +76,7 @@ class ElliottWaveEngine implements EngineInterface
             signals: $signals,
             overlays: [
                 'waveLabels' => $waveLabels,
+                'subLegs' => $subLegs,
                 'fibTargets' => $fibTargets,
                 'nextTargets' => $nextTargets,
                 'timeEstimate' => $timeEstimate,
@@ -155,6 +159,110 @@ class ElliottWaveEngine implements EngineInterface
         }
 
         return $filtered;
+    }
+
+    /**
+     * Detect sub-legs (lower degree pivots) within each main wave segment.
+     * Impulse waves (1, 3, 5) get sub-waves: i, ii, iii, iv, v
+     * Corrective waves (2, 4, A, B, C) get sub-waves: a, b, c
+     */
+    private function detectSubLegs(array $waveCounts, array $candles, string $degree): array
+    {
+        if (count($waveCounts) < 2) {
+            return [];
+        }
+
+        $subLegs = [];
+        $subStrength = 3; // Lower strength = more sensitive pivot detection
+
+        // Map degree to sub-degree
+        $subDegreeMap = [
+            'Primary' => 'Intermediate',
+            'Intermediate' => 'Minor',
+            'Minor' => 'Minute',
+            'Minute' => 'Minuette',
+            'Minuette' => 'Sub-Minuette',
+            'Sub-Minuette' => 'Micro',
+        ];
+        $subDegree = $subDegreeMap[$degree] ?? 'Micro';
+
+        // Impulse sub-labels and corrective sub-labels
+        $impulseSubLabels = ['i', 'ii', 'iii', 'iv', 'v'];
+        $correctiveSubLabels = ['a', 'b', 'c'];
+
+        for ($w = 0; $w < count($waveCounts) - 1; $w++) {
+            $startWave = $waveCounts[$w];
+            $endWave = $waveCounts[$w + 1];
+            $startIdx = $startWave['index'];
+            $endIdx = $endWave['index'];
+            $parentLabel = $endWave['label']; // The wave this segment belongs to
+
+            // Need enough candles for sub-pivot detection
+            if ($endIdx - $startIdx < $subStrength * 2 + 3) {
+                continue;
+            }
+
+            // Extract candle segment
+            $segment = array_slice($candles, $startIdx, $endIdx - $startIdx + 1);
+            if (count($segment) < $subStrength * 2 + 3) {
+                continue;
+            }
+
+            // Detect sub-pivots within this segment
+            $subPivots = [];
+            for ($i = $subStrength; $i < count($segment) - $subStrength; $i++) {
+                $isHigh = true;
+                $isLow = true;
+                $high = (float) $segment[$i]['high'];
+                $low = (float) $segment[$i]['low'];
+
+                for ($j = 1; $j <= $subStrength; $j++) {
+                    if ((float) $segment[$i - $j]['high'] >= $high || (float) $segment[$i + $j]['high'] >= $high) {
+                        $isHigh = false;
+                    }
+                    if ((float) $segment[$i - $j]['low'] <= $low || (float) $segment[$i + $j]['low'] <= $low) {
+                        $isLow = false;
+                    }
+                }
+
+                if ($isHigh) {
+                    $subPivots[] = ['type' => 'high', 'price' => $high, 'timestamp' => $segment[$i]['timestamp'], 'index' => $startIdx + $i];
+                }
+                if ($isLow) {
+                    $subPivots[] = ['type' => 'low', 'price' => $low, 'timestamp' => $segment[$i]['timestamp'], 'index' => $startIdx + $i];
+                }
+            }
+
+            usort($subPivots, fn ($a, $b) => $a['index'] <=> $b['index']);
+
+            // Build alternating swing sequence from sub-pivots
+            $subSwings = $this->buildSwingSequence($subPivots);
+
+            if (count($subSwings) < 2) {
+                continue;
+            }
+
+            // Determine sub-labels based on parent wave type
+            $isImpulseWave = in_array($parentLabel, ['1', '3', '5']);
+            $subLabels = $isImpulseWave ? $impulseSubLabels : $correctiveSubLabels;
+
+            // Assign labels to sub-swings (limit to available labels)
+            $labelCount = min(count($subSwings), count($subLabels));
+            for ($s = 0; $s < $labelCount; $s++) {
+                $sub = $subSwings[$s];
+                $subLegs[] = [
+                    'label' => $subLabels[$s],
+                    'type' => $sub['type'],
+                    'price' => $sub['price'],
+                    'timestamp' => $sub['timestamp'],
+                    'parentWave' => $parentLabel,
+                    'degree' => $subDegree,
+                    'isCorrection' => ! $isImpulseWave,
+                ];
+            }
+        }
+
+        return $subLegs;
     }
 
     /**

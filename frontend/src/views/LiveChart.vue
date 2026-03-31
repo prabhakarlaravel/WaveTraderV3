@@ -35,10 +35,11 @@ const syncAgoText = computed(() => {
 
 const timeframes = ['1M', '5M', '15M', '1H', '4H', '1D']
 const showMatrix = ref(true)
-const overlayToggles = ref({ waves: true, ob: true, fvg: false, bos: false, vwap: false, signals: true, projectile: true })
+const overlayToggles = ref({ waves: true, legs: true, ob: true, fvg: false, bos: false, vwap: false, signals: true, projectile: true })
 
 const overlayConfig = [
   { key: 'waves', label: 'Waves', color: '#8b5cf6' },
+  { key: 'legs', label: 'Legs', color: '#a78bfa' },
   { key: 'projectile', label: 'Proj', color: '#34d399' },
   { key: 'ob', label: 'OB', color: '#f59e0b' },
   { key: 'fvg', label: 'FVG', color: '#06b6d4' },
