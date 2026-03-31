@@ -96,9 +96,11 @@ export function createProjectileRenderer(getX, getY, toUnix) {
     const lastPivot = pivots[pivots.length - 1] // Current price point
     const prevPivot = pivots[pivots.length - 2] // Wave start
 
-    // Current wave metadata
-    const currentWave = timeEstimate.currentWave || nextTargets.nextWave
-    const isImpulse = ['1', '3', '5'].includes(currentWave)
+    // Wave metadata — the target is for the NEXT wave, not the current one
+    // nextTargets.nextWave = the wave being projected TO (e.g., "C")
+    // timeEstimate.currentWave = where we ARE now (e.g., "B")
+    const projectedWave = nextTargets.nextWave || timeEstimate.currentWave
+    const isImpulse = ['1', '3', '5'].includes(projectedWave)
 
     // Targets
     const targets = nextTargets.targets || []
@@ -122,13 +124,13 @@ export function createProjectileRenderer(getX, getY, toUnix) {
     const remainingWidth = Math.max(estTotalWidth - elapsedWidth, 25)
     const targetX = Math.min(lastPivot.x + remainingWidth, w - 85)
 
-    // ── Next wave sequence labels ──
-    const isCorrectiveLabel = ['A', 'B', 'C'].includes(currentWave)
+    // ── Wave sequence labels: projected wave → next → next ──
+    const isCorrectiveLabel = ['A', 'B', 'C'].includes(projectedWave)
     const waveSequence = isCorrectiveLabel
-      ? { w2Label: 'C' === currentWave ? '1' : currentWave === 'A' ? 'B' : 'C',
-          w3Label: 'C' === currentWave ? '2' : currentWave === 'A' ? 'C' : '1' }
-      : { w2Label: isImpulse ? 'A' : String(Math.min(parseInt(currentWave || '0') + 1, 5)),
-          w3Label: isImpulse ? 'B' : (['4'].includes(currentWave) ? 'A' : String(Math.min(parseInt(currentWave || '0') + 2, 5))) }
+      ? { w2Label: 'C' === projectedWave ? '1' : projectedWave === 'A' ? 'B' : 'C',
+          w3Label: 'C' === projectedWave ? '2' : projectedWave === 'A' ? 'C' : '1' }
+      : { w2Label: isImpulse ? 'A' : String(Math.min(parseInt(projectedWave || '0') + 1, 5)),
+          w3Label: isImpulse ? 'B' : (['4'].includes(projectedWave) ? 'A' : String(Math.min(parseInt(projectedWave || '0') + 2, 5))) }
 
     // ── Next wave (2nd projected) — retracement of the current projected move ──
     const projectedRange = targetPrice - lastPivot.price // Range of current wave projection
@@ -445,7 +447,7 @@ export function createProjectileRenderer(getX, getY, toUnix) {
       add(g, 'text', {
         x: targetX, y: projLabelY + 3.5, textAnchor: 'middle',
         fill: '#34d399', fontSize: '10', fontWeight: '800', fontFamily: "'JetBrains Mono',monospace", opacity: '0.8',
-      }).textContent = currentWave || '?'
+      }).textContent = projectedWave || '?'
 
       // ── 2nd projected wave: curved path from target → wave 2 ──
       if (w2Y382 !== null && w2EndX > targetX + 15) {
