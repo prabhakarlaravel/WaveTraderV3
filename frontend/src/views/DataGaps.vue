@@ -146,17 +146,38 @@ const calendarMonths = computed(() => {
   // If no candles at all, treat ALL trading days as gaps
   const noData = (tfData.totalCandles || 0) === 0
 
-  // Build a set of gap dates from the gaps array
+  // Build separate sets: holidays (full_day + 0 existing candles) vs real gaps
+  const holidayDates = new Set()
   const gapDates = new Set()
+  const todayKey = (() => {
+    const n = new Date()
+    return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`
+  })()
+
   if (!noData) {
     for (const gap of (tfData.gaps || [])) {
-      const start = new Date(gap.gapStart)
-      const end = new Date(gap.gapEnd)
-      // Mark each day in the gap range
-      const d = new Date(start)
-      while (d <= end) {
-        gapDates.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`)
-        d.setDate(d.getDate() + 1)
+      // Extract IST date from gap (use 'date' field if available from NSE detector)
+      const gapDate = gap.date || null
+      const isHoliday = gap.gapType === 'full_day' && (gap.existingCandles === 0 || gap.existingCandles === undefined)
+
+      if (gapDate) {
+        // NSE detector provides a single date per gap
+        if (gapDate === todayKey) {
+          gapDates.add(gapDate) // Today shown as gap (market not yet open), not holiday
+        } else if (isHoliday) {
+          holidayDates.add(gapDate)
+        } else {
+          gapDates.add(gapDate)
+        }
+      } else {
+        // Crypto/Forex: range-based gaps
+        const start = new Date(gap.gapStart)
+        const end = new Date(gap.gapEnd)
+        const d = new Date(start)
+        while (d <= end) {
+          gapDates.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`)
+          d.setDate(d.getDate() + 1)
+        }
       }
     }
   }
@@ -188,6 +209,7 @@ const calendarMonths = computed(() => {
       let status = 'ok'
       if (isFuture) status = 'future'
       else if (isWeekend) status = 'weekend'
+      else if (holidayDates.has(key)) status = 'holiday'
       else if (noData || gapDates.has(key)) status = 'gap'
 
       days.push({ d, status, key, date })
@@ -263,6 +285,7 @@ function queueStatusColor(s) {
             <h3 class="cal-title">📅 {{ activeTf }} Data Heatmap</h3>
             <div class="cal-legend">
               <span class="cal-leg"><span class="cal-dot" style="background:rgba(16,185,129,0.4)"></span>Complete</span>
+              <span class="cal-leg"><span class="cal-dot" style="background:rgba(56,189,248,0.45);border:1px solid rgba(56,189,248,0.3)"></span>Holiday</span>
               <span class="cal-leg"><span class="cal-dot" style="background:rgba(239,68,68,0.55)"></span>Missing</span>
               <span class="cal-leg"><span class="cal-dot" style="background:rgba(99,102,241,0.08);border:1px solid #2d2b3d"></span>Weekend</span>
               <span class="cal-leg"><span class="cal-dot" style="background:rgba(71,85,105,0.15)"></span>Future</span>
@@ -281,8 +304,9 @@ function queueStatusColor(s) {
                   <div v-if="day.blank" class="cal-cell cal-blank"></div>
                   <div v-else
                     :class="['cal-cell', 'cal-' + day.status]"
-                    :title="day.status === 'gap' ? day.key + ' — MISSING' : day.status === 'weekend' ? day.key + ' (Weekend)' : day.key + ' — Complete'">
+                    :title="day.status === 'holiday' ? day.key + ' — HOLIDAY' : day.status === 'gap' ? day.key + ' — MISSING' : day.status === 'weekend' ? day.key + ' (Weekend)' : day.key + ' — Complete'">
                     <span v-if="day.status === 'gap'" class="cal-gap-mark">✕</span>
+                    <span v-else-if="day.status === 'holiday'" class="cal-holiday-mark">H</span>
                   </div>
                 </template>
               </div>
@@ -300,8 +324,12 @@ function queueStatusColor(s) {
               <div class="cal-stat-val" style="color:#10b981">{{ calendarMonths.reduce((s,m) => s + m.days.filter(d => d.status === 'ok').length, 0) }}</div>
             </div>
             <div class="cal-stat">
+              <div class="cal-stat-label">Holidays</div>
+              <div class="cal-stat-val" style="color:#38bdf8">{{ calendarMonths.reduce((s,m) => s + m.days.filter(d => d.status === 'holiday').length, 0) }}</div>
+            </div>
+            <div class="cal-stat">
               <div class="cal-stat-label">Gaps</div>
-              <div class="cal-stat-val" style="color:#ef4444">{{ tfGapCount(activeTf) }}</div>
+              <div class="cal-stat-val" style="color:#ef4444">{{ calendarMonths.reduce((s,m) => s + m.days.filter(d => d.status === 'gap').length, 0) }}</div>
             </div>
             <div class="cal-stat">
               <div class="cal-stat-label">Health</div>
@@ -468,9 +496,11 @@ function queueStatusColor(s) {
 .cal-blank:hover { transform: none; }
 .cal-ok { background: rgba(16,185,129,0.35); }
 .cal-gap { background: rgba(239,68,68,0.5); border: 1px solid rgba(239,68,68,0.4); }
+.cal-holiday { background: rgba(56,189,248,0.35); border: 1px solid rgba(56,189,248,0.25); }
 .cal-weekend { background: rgba(99,102,241,0.06); }
 .cal-future { background: rgba(71,85,105,0.1); }
 .cal-gap-mark { color: #fca5a5; font-size: 8px; }
+.cal-holiday-mark { color: #7dd3fc; font-size: 7px; font-weight: 800; }
 
 /* Stats bar */
 .cal-stats { margin-top: 16px; display: flex; gap: 12px; justify-content: center; }
