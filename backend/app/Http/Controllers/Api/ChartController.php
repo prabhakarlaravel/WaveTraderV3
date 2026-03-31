@@ -135,63 +135,60 @@ class ChartController extends Controller
             'timeframe' => 'required|string|in:1M,5M,15M,1H,4H,1D',
         ]);
 
-        $symbolId = $request->symbol_id;
+        $symbolId = (int) $request->symbol_id;
         $timeframe = $request->timeframe;
-        $symbol = Symbol::findOrFail($symbolId);
 
-        // Get candles for live computation
-        $candles = Candle::where('symbol_id', $symbolId)
-            ->where('timeframe', $timeframe)
-            ->orderBy('timestamp')
-            ->get()
-            ->toArray();
+        // Try Redis cache first (populated by RunEnginesJob)
+        $cached = RunEnginesJob::getCachedOverlays($symbolId, $timeframe);
 
-        // Run engines live to get fresh overlay data
-        $msResult = (new MarketStructureEngine(5))->run($candles, $symbol->ticker, $timeframe);
-        $obResult = (new OrderBlockEngine())->run($candles, $symbol->ticker, $timeframe);
-        $fvgResult = (new FVGEngine())->run($candles, $symbol->ticker, $timeframe);
-        $vwapResult = (new VWAPEngine())->run($candles, $symbol->ticker, $timeframe);
-        $paResult = (new PriceActionEngine())->run($candles, $symbol->ticker, $timeframe);
-        $ewResult = (new ElliottWaveEngine())->run($candles, $symbol->ticker, $timeframe);
-        $smcResult = (new SMCEngine())->run($candles, $symbol->ticker, $timeframe);
+        if ($cached) {
+            return response()->json($cached);
+        }
 
-        // Wave labels from Elliott Wave Engine (with degree, phase, fib targets)
-        $waveLabels = $ewResult->overlays['waveLabels'] ?? [];
-        $swings = $msResult->overlays['swings'] ?? [];
+        // Cache miss — return DB-persisted subset with stale flag.
+        // Dispatch a one-off engine run to warm the cache.
+        RunEnginesJob::dispatch($symbolId, $timeframe)->onQueue('engines');
 
-        // Get DB-persisted signals
         $signals = Signal::where('symbol_id', $symbolId)
             ->where('timeframe', $timeframe)
             ->orderByDesc('candle_timestamp')
             ->limit(200)
-            ->get();
+            ->get()
+            ->toArray();
+
+        $orderBlocks = OrderBlock::where('symbol_id', $symbolId)
+            ->where('timeframe', $timeframe)
+            ->where('status', '!=', 'fully_mitigated')
+            ->get()
+            ->toArray();
+
+        $fvgs = FVG::where('symbol_id', $symbolId)
+            ->where('timeframe', $timeframe)
+            ->where('fill_pct', '<', 100)
+            ->get()
+            ->toArray();
 
         return response()->json([
             'signals' => $signals,
-            'orderBlocks' => $obResult->overlays['orderBlocks'] ?? [],
-            'fvgs' => $fvgResult->overlays['fvgs'] ?? [],
-            'swings' => $swings,
-            'waveLabels' => $waveLabels,
-            'subLegs' => $ewResult->overlays['subLegs'] ?? [],
-            'bos' => $msResult->overlays['bos'] ?? [],
-            'vwap' => $vwapResult->overlays['vwap'] ?? [],
-            'patterns' => $paResult->overlays['patterns'] ?? [],
-            'fibTargets' => $ewResult->overlays['fibTargets'] ?? [],
-            'nextTargets' => $ewResult->overlays['nextTargets'] ?? [],
-            'timeEstimate' => $ewResult->overlays['timeEstimate'] ?? [],
-            'liquidityPools' => $smcResult->overlays['liquidityPools'] ?? [],
-            'oteZones' => $smcResult->overlays['oteZones'] ?? [],
-            'premiumDiscount' => $smcResult->overlays['premiumDiscount'] ?? [],
-            'inducements' => $smcResult->overlays['inducements'] ?? [],
-            'confluence' => (new ConfluenceEngine())->score(
-                $ewResult, $msResult, $obResult, $fvgResult, $smcResult, $vwapResult, $paResult,
-                ! empty($candles) ? (float) end($candles)['close'] : 0,
-            ),
-            'metadata' => [
-                'trend' => $msResult->metadata['trend'] ?? 'neutral',
-                'elliott_wave' => $ewResult->metadata ?? [],
-                'smc' => $smcResult->metadata ?? [],
-            ],
+            'orderBlocks' => $orderBlocks,
+            'fvgs' => $fvgs,
+            'swings' => [],
+            'waveLabels' => [],
+            'subLegs' => [],
+            'bos' => [],
+            'vwap' => [],
+            'patterns' => [],
+            'fibTargets' => [],
+            'nextTargets' => [],
+            'timeEstimate' => [],
+            'liquidityPools' => [],
+            'oteZones' => [],
+            'premiumDiscount' => [],
+            'inducements' => [],
+            'confluence' => null,
+            'metadata' => ['trend' => 'neutral', 'elliott_wave' => [], 'smc' => []],
+            'stale' => true,
+            'computed_at' => null,
         ]);
     }
 
@@ -260,6 +257,28 @@ class ChartController extends Controller
         $trends = [];
 
         foreach (self::TIMEFRAMES as $tf) {
+            // Read from Redis cache (populated by RunEnginesJob)
+            $cached = RunEnginesJob::getCachedOverlays($symbol->id, $tf);
+
+            if ($cached && ! empty($cached['waveLabels'])) {
+                $ewMeta = $cached['metadata']['elliott_wave'] ?? [];
+                $trend = $cached['metadata']['trend'] ?? 'neutral';
+
+                $trends[] = $trend;
+                $tfData[$tf] = [
+                    'timeframe' => $tf,
+                    'degree' => $degrees[$tf] ?? $tf,
+                    'wave' => $ewMeta['current_wave'] ?? null,
+                    'phase' => $ewMeta['phase'] ?? null,
+                    'trend' => $trend,
+                    'health' => $ewMeta['health_score'] ?? 0,
+                    'waveLabels' => $cached['waveLabels'],
+                    'fibTargets' => $cached['fibTargets'] ?? [],
+                ];
+                continue;
+            }
+
+            // Cache miss — fall back to live computation for this timeframe
             $candles = Candle::where('symbol_id', $symbol->id)
                 ->where('timeframe', $tf)
                 ->orderBy('timestamp')

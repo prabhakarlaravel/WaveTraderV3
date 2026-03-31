@@ -108,6 +108,22 @@ export const useRealtimeStore = defineStore('realtime', () => {
       console.warn('[Realtime] Wave channel failed:', err.message)
     }
 
+    // Overlay updates — full payload pushed from RunEnginesJob via Redis cache
+    const overlayChannel = `overlays.${symbol}.${timeframe}`
+    try {
+      echo.channel(overlayChannel)
+        .listen('OverlaysUpdated', (e) => {
+          if (e.overlays) {
+            chartStore.overlays = e.overlays
+            lastUpdate.value = new Date()
+            console.log(`[WS] OverlaysUpdated via Reverb: ${e.timeframe} @ ${e.computedAt}`)
+          }
+        })
+      subscribedChannels.value.push(overlayChannel)
+    } catch (err) {
+      console.warn('[Realtime] Overlay channel failed:', err.message)
+    }
+
     connected.value = true
 
     // Start polling (respects market hours)

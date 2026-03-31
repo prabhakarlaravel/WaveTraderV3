@@ -91,8 +91,14 @@ class FetchCandlesJob implements ShouldQueue
             Log::warning("Broadcasting skipped (Reverb not running?): {$e->getMessage()}");
         }
 
-        // Dispatch engine runs after candle fetch (rule #8: engines queue)
+        // Dispatch engine runs for ALL timeframes that have new data (rule #8: engines queue)
+        // RunEnginesJob implements ShouldBeUnique — duplicates for the same symbol/TF are skipped
         RunEnginesJob::dispatch($this->symbolId, $this->timeframe)->onQueue('engines');
+
+        // Also dispatch for each higher timeframe that was aggregated from 1M
+        foreach (array_keys($aggregatedCandles) as $tf) {
+            RunEnginesJob::dispatch($this->symbolId, $tf)->onQueue('engines');
+        }
     }
 
     private function resolveDataSource(string $exchange): DataSourceInterface

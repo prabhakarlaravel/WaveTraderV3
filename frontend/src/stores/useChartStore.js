@@ -152,6 +152,12 @@ export const useChartStore = defineStore('chart', () => {
         },
       })
       overlays.value = data
+
+      // If cache miss (stale), retry after 3s to pick up warmed cache
+      if (data.stale) {
+        console.log('[Chart] Overlay cache cold — retrying in 3s')
+        setTimeout(() => fetchOverlays(), 3000)
+      }
     } catch {
       overlays.value = { signals: [], orderBlocks: [], fvgs: [] }
     }

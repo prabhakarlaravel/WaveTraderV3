@@ -11,6 +11,7 @@ Broadcast::channel('candles.{symbol}.{timeframe}', fn () => true);
 Broadcast::channel('waves.{symbol}', fn () => true);
 Broadcast::channel('signals.{symbol}', fn () => true);
 Broadcast::channel('health.{symbol}', fn () => true);
+Broadcast::channel('overlays.{symbol}.{timeframe}', fn () => true);
 
 // Private channel — user-specific trades
 Broadcast::channel('trades.{userId}', function ($user, $userId) {
