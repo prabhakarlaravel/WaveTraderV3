@@ -256,7 +256,8 @@ function queueStatusColor(s) {
       <div class="gaps-actions">
         <SymbolSelector :symbols="symbols" v-model="selectedSymbol" @change="smartScan()" compact />
         <button @click="smartScan" :disabled="scanning" class="btn btn-scan">
-          {{ scanning ? '⟳ Scanning…' : '🔍 Scan' }}
+          <svg v-if="scanning" class="btn-spin" viewBox="0 0 16 16" width="12" height="12"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="20 18" stroke-linecap="round"/></svg>
+          {{ scanning ? 'Scanning…' : 'Scan' }}
         </button>
         <button @click="fixAll" :disabled="!scanResult?.totalGaps || fixingAll || !!fillingTf" class="btn btn-fix">
           ⚡ Fix All Gaps
@@ -438,9 +439,20 @@ function queueStatusColor(s) {
       </div>
     </div>
 
-    <!-- Loading state -->
-    <div v-if="!scanResult && scanning" class="gaps-loading">
-      ⟳ Scanning for data gaps across all timeframes…
+    <!-- Loading overlay — shown on initial scan or re-scan -->
+    <div v-if="scanning" class="scan-overlay" :class="{ 'scan-overlay-full': !scanResult }">
+      <div class="scan-card">
+        <svg class="scan-spinner" viewBox="0 0 50 50">
+          <circle class="scan-spinner-track" cx="25" cy="25" r="20" fill="none" stroke-width="4" />
+          <circle class="scan-spinner-arc" cx="25" cy="25" r="20" fill="none" stroke-width="4"
+            stroke-linecap="round" stroke-dasharray="80 120" />
+        </svg>
+        <div class="scan-text">
+          <div class="scan-title">Scanning 6 timeframes</div>
+          <div class="scan-sub">Analyzing <span class="scan-sym">{{ chartStore.activeSymbol?.ticker || 'symbol' }}</span> for data gaps…</div>
+          <div class="scan-dots"><span /><span /><span /></div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -455,10 +467,11 @@ function queueStatusColor(s) {
 .gaps-subtitle { font-size: 12px; color: var(--dim); margin: 4px 0 0; }
 .gaps-actions { display: flex; gap: 8px; align-items: center; }
 
-.btn { padding: 6px 14px; border-radius: 8px; border: none; font-size: 11px; font-weight: 700; cursor: pointer; }
+.btn { padding: 6px 14px; border-radius: 8px; border: none; font-size: 11px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 5px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-scan { background: #2563eb; color: #fff; }
 .btn-fix { background: #059669; color: #fff; }
+.btn-spin { animation: scanRotate 0.8s linear infinite; }
 
 /* ── Grid ────────────────────────────────────────────────────── */
 .gaps-grid { display: grid; grid-template-columns: 1fr 300px; gap: 16px; }
@@ -574,6 +587,47 @@ function queueStatusColor(s) {
 .market-label { font-weight: 700; color: #94a3b8; }
 .market-val { font-weight: 700; }
 
-/* Loading */
-.gaps-loading { text-align: center; padding: 60px; font-size: 13px; color: var(--dim); }
+/* ── Scan overlay ────────────────────────────────────────────── */
+.scan-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(10, 10, 20, 0.55); backdrop-filter: blur(4px);
+  animation: scanFadeIn 0.2s ease;
+}
+.scan-overlay-full { background: rgba(10, 10, 20, 0.8); }
+
+.scan-card {
+  display: flex; align-items: center; gap: 20px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 16px; padding: 24px 36px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  animation: scanSlideUp 0.3s ease;
+}
+
+/* Spinner */
+.scan-spinner { width: 44px; height: 44px; flex-shrink: 0; animation: scanRotate 1s linear infinite; }
+.scan-spinner-track { stroke: rgba(99,102,241,0.15); }
+.scan-spinner-arc { stroke: #6366f1; }
+
+/* Text */
+.scan-title { font-size: 14px; font-weight: 800; color: var(--text); }
+.scan-sub { font-size: 11px; color: var(--dim); margin-top: 4px; }
+.scan-sym { color: #6366f1; font-weight: 700; font-family: var(--mono); }
+
+/* Bouncing dots */
+.scan-dots { display: flex; gap: 4px; margin-top: 8px; }
+.scan-dots span {
+  width: 5px; height: 5px; border-radius: 50%; background: #6366f1;
+  animation: scanBounce 1.2s ease-in-out infinite;
+}
+.scan-dots span:nth-child(2) { animation-delay: 0.15s; }
+.scan-dots span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes scanFadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scanSlideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes scanRotate { to { transform: rotate(360deg); } }
+@keyframes scanBounce {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1.3); }
+}
 </style>
