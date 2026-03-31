@@ -7,9 +7,10 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\DataGap;
 use App\Models\Symbol;
-use App\Services\GapDetectionService;
+use App\Services\GapDetection\GapDetectorResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class GapController extends Controller
 {
@@ -24,7 +25,10 @@ class GapController extends Controller
         return response()->json($gaps);
     }
 
-    public function scan(Request $request, GapDetectionService $gapService): JsonResponse
+    /**
+     * Smart scan: detect gaps using market-specific detector.
+     */
+    public function scan(Request $request): JsonResponse
     {
         $request->validate([
             'symbol_id' => 'required|exists:symbols,id',
@@ -32,21 +36,17 @@ class GapController extends Controller
         ]);
 
         $symbol = Symbol::findOrFail($request->symbol_id);
+        $detector = GapDetectorResolver::resolve($symbol);
 
-        if ($request->timeframe) {
-            $gaps = $gapService->detect($symbol, $request->timeframe);
+        Log::info("GapController: scanning {$symbol->ticker} using {$detector->getMarketType()} detector");
 
-            return response()->json([
-                'message' => "Found {$gaps->count()} gaps",
-                'gaps' => $gaps,
-            ]);
-        }
-
-        // Smart scan: all TFs with visual timeline
-        return response()->json($gapService->smartScan($symbol));
+        return response()->json($detector->scan($symbol));
     }
 
-    public function fill(Request $request, GapDetectionService $gapService): JsonResponse
+    /**
+     * Fill gaps for a specific timeframe using market-specific strategy.
+     */
+    public function fill(Request $request): JsonResponse
     {
         $request->validate([
             'symbol_id' => 'required|exists:symbols,id',
@@ -54,28 +54,20 @@ class GapController extends Controller
         ]);
 
         $symbol = Symbol::findOrFail($request->symbol_id);
-        $gaps = DataGap::where('symbol_id', $symbol->id)
-            ->where('timeframe', $request->timeframe)
-            ->unfilled()
-            ->get();
+        $timeframe = $request->timeframe;
+        $detector = GapDetectorResolver::resolve($symbol);
 
-        if ($gaps->isEmpty()) {
-            return response()->json([
-                'success' => false,
-                'message' => "No unfilled gaps found for {$request->timeframe}",
-                'filled' => 0,
-            ]);
-        }
+        Log::info("GapController: filling {$symbol->ticker} [{$timeframe}] using {$detector->getMarketType()} detector");
 
-        $filledCount = $gapService->fill($symbol, $request->timeframe, $gaps);
+        $filledCount = $detector->fill($symbol, $timeframe);
 
         return response()->json([
-            'success' => $filledCount > 0,
-            'message' => $filledCount > 0
-                ? "Filled {$gaps->count()} gap(s) — {$filledCount} candles fetched from exchange"
-                : "No candles could be fetched. Exchange may be unreachable.",
-            'filled' => $filledCount,
-            'gapsProcessed' => $gaps->count(),
+            'success'       => $filledCount > 0,
+            'message'       => $filledCount > 0
+                ? "Filled {$filledCount} candles for {$timeframe}"
+                : "No candles could be filled. May be a holiday or exchange unreachable.",
+            'filled'        => $filledCount,
+            'marketType'    => $detector->getMarketType(),
         ]);
     }
 

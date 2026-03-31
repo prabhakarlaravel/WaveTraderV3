@@ -166,6 +166,8 @@ const {
 const { renderAll, cleanup, attachChartListeners, setContainer } = useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayToggles, renderDrawings)
 
 let lastSetDataLength = 0
+let lastRenderedSymbolId = null
+let lastRenderedTimeframe = null
 
 function updateChartData() {
   if (!candleSeriesRef.value) return
@@ -173,13 +175,19 @@ function updateChartData() {
   const volume = chartStore.formattedVolume
   if (candles.length === 0) return
 
-  // Full setData on initial load, TF switch, or symbol switch (big length change)
-  // Use update() for live 30s ticks — smooth, no flicker
-  if (Math.abs(candles.length - lastSetDataLength) > 2 || lastSetDataLength === 0) {
+  // Detect symbol or timeframe change — always do full setData
+  const symbolChanged = chartStore.activeSymbolId !== lastRenderedSymbolId
+  const tfChanged = chartStore.activeTimeframe !== lastRenderedTimeframe
+
+  // Full setData on: initial load, symbol switch, TF switch, or significant candle count change
+  // Use update() only for live 30s ticks — smooth, no flicker
+  if (symbolChanged || tfChanged || Math.abs(candles.length - lastSetDataLength) > 2 || lastSetDataLength === 0) {
     candleSeriesRef.value.setData(candles)
     volumeSeries.setData(volume)
     chartRef.value.timeScale().scrollToRealTime()
     lastSetDataLength = candles.length
+    lastRenderedSymbolId = chartStore.activeSymbolId
+    lastRenderedTimeframe = chartStore.activeTimeframe
   } else {
     // Live update: update the current forming candle + append new ones
     const last = candles[candles.length - 1]
@@ -274,16 +282,23 @@ watch(() => drawingStore.currentDrawings, () => renderAll(), { deep: true })
 
       <div class="toolbar-sep"></div>
 
-      <!-- Live badge with sync timer -->
-      <div class="live-badge" :title="realtime.isStale ? 'Data may be stale (>90s since last update)' : 'Polling every 30s'">
-        <div class="live-dot" :style="realtime.isStale
-          ? 'background: var(--bear); box-shadow: 0 0 6px var(--bear)'
-          : realtime.connected
-            ? ''
-            : 'background: var(--ob); box-shadow: 0 0 6px var(--ob)'
+      <!-- Market status + Live badge -->
+      <div v-if="!realtime.marketOpen && realtime.marketStatus" class="market-closed-badge" :title="realtime.marketMessage">
+        <div class="closed-dot"></div>
+        <span class="closed-text">{{ realtime.marketType === 'nse' ? 'NSE CLOSED' : realtime.marketType === 'forex' ? 'FOREX CLOSED' : 'CLOSED' }}</span>
+        <span class="closed-sub">{{ realtime.marketStatus?.session || '' }}</span>
+      </div>
+      <div class="live-badge" :title="realtime.isStale ? 'Data may be stale (>90s since last update)' : realtime.marketOpen ? 'Polling every 30s' : 'Market closed — showing last available data'">
+        <div class="live-dot" :style="!realtime.marketOpen
+          ? 'background: var(--dim); box-shadow: none; animation: none'
+          : realtime.isStale
+            ? 'background: var(--bear); box-shadow: 0 0 6px var(--bear)'
+            : realtime.connected
+              ? ''
+              : 'background: var(--ob); box-shadow: 0 0 6px var(--ob)'
         "></div>
-        <span class="live-text" :style="realtime.isStale ? 'color: var(--bear)' : ''">
-          {{ realtime.isStale ? 'STALE' : 'LIVE' }}
+        <span class="live-text" :style="!realtime.marketOpen ? 'color: var(--dim)' : realtime.isStale ? 'color: var(--bear)' : ''">
+          {{ !realtime.marketOpen ? 'DB' : realtime.isStale ? 'STALE' : 'LIVE' }}
         </span>
         <span v-if="realtime.lastUpdate" class="sync-timer" :style="realtime.isStale ? 'color: var(--bear)' : ''">
           {{ syncAgoText }}
@@ -411,6 +426,16 @@ watch(() => drawingStore.currentDrawings, () => renderAll(), { deep: true })
 }
 .live-text { font-size: 10px; color: var(--muted); font-family: var(--mono); }
 .sync-timer { font-size: 10px; color: var(--dim); font-family: var(--mono); min-width: 55px; }
+
+.market-closed-badge {
+  display: flex; align-items: center; gap: 5px; padding: 3px 10px;
+  background: rgba(245,158,11,0.08); border-radius: 6px; border: 1px solid rgba(245,158,11,0.25);
+}
+.closed-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--ob);
+}
+.closed-text { font-size: 10px; color: var(--ob); font-family: var(--mono); font-weight: 700; }
+.closed-sub { font-size: 9px; color: var(--dim); font-family: var(--mono); }
 
 .matrix-toggle {
   display: flex; align-items: center; gap: 5px;

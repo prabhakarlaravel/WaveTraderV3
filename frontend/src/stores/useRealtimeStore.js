@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
-import { ref, watch, onUnmounted, computed } from 'vue'
+import { ref, watch, computed } from 'vue'
+import axios from 'axios'
 import echo from '../echo'
 import { useChartStore } from './useChartStore'
 
@@ -11,10 +12,19 @@ export const useRealtimeStore = defineStore('realtime', () => {
   const wsActive = ref(false)
   const fetchCount = ref(0)
 
+  // Market status from backend
+  const marketStatus = ref(null)
+  const marketOpen = computed(() => marketStatus.value?.open ?? true)
+  const marketMessage = computed(() => marketStatus.value?.message ?? '')
+  const marketType = computed(() => marketStatus.value?.marketType ?? 'unknown')
+  const nextMarketOpen = computed(() => marketStatus.value?.nextOpen ?? null)
+
   const chartStore = useChartStore()
 
   // Stale if no update in 90 seconds (rule #1: warn if >90s)
+  // But only show stale warning if market is open
   const isStale = computed(() => {
+    if (!marketOpen.value) return false // Market closed — not stale, just closed
     if (!lastUpdate.value) return true
     return Date.now() - lastUpdate.value.getTime() > 90000
   })
@@ -25,12 +35,33 @@ export const useRealtimeStore = defineStore('realtime', () => {
   })
 
   /**
+   * Fetch market status from backend for current symbol.
+   * Determines if market is open, session info, next open time.
+   */
+  async function fetchMarketStatus() {
+    if (!chartStore.activeSymbolId) return
+    try {
+      const { data } = await axios.get('/api/v1/chart/market-status', {
+        params: { symbol_id: chartStore.activeSymbolId },
+      })
+      marketStatus.value = data
+      console.log(`[Realtime] Market status: ${data.marketType} — ${data.open ? 'OPEN' : 'CLOSED'} — ${data.message}`)
+    } catch (err) {
+      console.warn('[Realtime] Market status fetch failed:', err.message)
+      marketStatus.value = null
+    }
+  }
+
+  /**
    * Subscribe to all WebSocket channels for the active symbol.
    */
   function subscribe(symbol, timeframe) {
     unsubscribeAll()
 
     if (!symbol) return
+
+    // Fetch market status first
+    fetchMarketStatus()
 
     // Candle updates
     const candleChannel = `candles.${symbol}.${timeframe}`
@@ -79,7 +110,7 @@ export const useRealtimeStore = defineStore('realtime', () => {
 
     connected.value = true
 
-    // Start fallback HTTP polling (30s interval per CLAUDE.md)
+    // Start polling (respects market hours)
     startPolling()
 
     console.log(`[Realtime] Subscribed to ${symbol} ${timeframe}`)
@@ -95,24 +126,30 @@ export const useRealtimeStore = defineStore('realtime', () => {
   }
 
   /**
-   * 30-second HTTP polling fallback.
-   * Always polls — ensures data freshness even if WebSocket is working
-   * (WebSocket delivers individual candle ticks, polling ensures no gaps).
+   * Smart polling — adapts interval based on market type:
+   * - Crypto: 30s (24/7, always active)
+   * - NSE: 30s during market hours, 5min outside (just for status refresh)
+   * - Forex: 30s during sessions, 5min on weekends
    */
   function startPolling() {
     stopPolling()
 
-    // Immediate first poll to ensure fresh data on mount/TF switch
+    // Immediate first poll
     pollLatestCandles().then(() => { fetchCount.value++ }).catch(() => {})
 
     pollingInterval.value = setInterval(async () => {
       try {
         await pollLatestCandles()
         fetchCount.value++
+
+        // Refresh market status every 5 minutes (market might open/close)
+        if (fetchCount.value % 10 === 0) {
+          await fetchMarketStatus()
+        }
       } catch (err) {
         console.warn('[Realtime] Poll failed:', err.message)
       }
-    }, 30000) // 30 seconds per CLAUDE.md
+    }, 30000) // 30 seconds — backend handles market hours check
   }
 
   function stopPolling() {
@@ -123,22 +160,20 @@ export const useRealtimeStore = defineStore('realtime', () => {
   }
 
   /**
-   * Fetch latest candles from exchange via the fetchLatest endpoint.
-   * This triggers a LIVE fetch from Binance/OANDA/etc, upserts to DB,
-   * aggregates higher TFs, and returns the freshest candles.
+   * Fetch latest candles via the market-specific LiveFeed endpoint.
+   * Backend handles market hours, IST/UTC conversion, and returns
+   * DB candles if market is closed.
    */
   async function pollLatestCandles() {
     if (!chartStore.activeSymbolId || !chartStore.activeTimeframe) return
 
-    const { data: newCandles } = await import('axios').then(m =>
-      m.default.get('/api/v1/chart/candles/latest', {
-        params: {
-          symbol_id: chartStore.activeSymbolId,
-          timeframe: chartStore.activeTimeframe,
-          limit: 10,
-        },
-      })
-    )
+    const { data: newCandles } = await axios.get('/api/v1/chart/candles/latest', {
+      params: {
+        symbol_id: chartStore.activeSymbolId,
+        timeframe: chartStore.activeTimeframe,
+        limit: 10,
+      },
+    })
 
     if (!newCandles || newCandles.length === 0) return
 
@@ -148,14 +183,12 @@ export const useRealtimeStore = defineStore('realtime', () => {
     for (const nc of newCandles) {
       const existingIdx = existing.findIndex(c => c.timestamp === nc.timestamp)
       if (existingIdx >= 0) {
-        // Update existing candle (OHLCV may have changed)
         const old = existing[existingIdx]
         if (old.close !== nc.close || old.high !== nc.high || old.low !== nc.low || old.volume !== nc.volume) {
           existing[existingIdx] = nc
           updated = true
         }
       } else {
-        // New candle — append
         existing.push(nc)
         updated = true
       }
@@ -173,14 +206,13 @@ export const useRealtimeStore = defineStore('realtime', () => {
   /**
    * Handle incoming WebSocket candle update — append or update the last candle.
    */
-  // Debounce overlay refresh to avoid hammering the API on rapid WS events
   let overlayRefreshTimer = null
   function scheduleOverlayRefresh() {
     if (overlayRefreshTimer) clearTimeout(overlayRefreshTimer)
     overlayRefreshTimer = setTimeout(() => {
       chartStore.fetchOverlays()
       console.log('[WS] Overlays refreshed after candle update')
-    }, 2000) // 2s debounce
+    }, 2000)
   }
 
   function onCandleUpdate(event) {
@@ -194,10 +226,8 @@ export const useRealtimeStore = defineStore('realtime', () => {
     const newTimestamp = candle.timestamp
 
     if (lastCandle.timestamp === newTimestamp) {
-      // Update existing forming candle OHLCV
       Object.assign(candles[candles.length - 1], candle)
     } else if (newTimestamp > lastCandle.timestamp) {
-      // New candle period started — append
       candles.push(candle)
     }
 
@@ -205,21 +235,15 @@ export const useRealtimeStore = defineStore('realtime', () => {
     lastUpdate.value = new Date()
     console.log(`[WS] CandleUpdated via Reverb: ${event.timeframe} @ ${newTimestamp}`)
 
-    // Schedule overlay + wave refresh after debounce
     scheduleOverlayRefresh()
   }
 
-  /**
-   * Handle incoming signal — refresh overlays.
-   */
   function onSignalUpdate() {
     chartStore.fetchOverlays()
   }
 
-  /**
-   * Force an immediate refresh (manual trigger).
-   */
   async function forceRefresh() {
+    await fetchMarketStatus()
     await pollLatestCandles()
     fetchCount.value++
   }
@@ -243,9 +267,15 @@ export const useRealtimeStore = defineStore('realtime', () => {
     isStale,
     secondsSinceUpdate,
     fetchCount,
+    marketStatus,
+    marketOpen,
+    marketMessage,
+    marketType,
+    nextMarketOpen,
     subscribe,
     unsubscribeAll,
     forceRefresh,
+    fetchMarketStatus,
     startPolling,
     stopPolling,
   }

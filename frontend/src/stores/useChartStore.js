@@ -5,6 +5,7 @@ import { toISTEpoch } from '../utils/timezone'
 
 const PERSIST_KEY = 'wt3_active_symbol'
 const PERSIST_TF_KEY = 'wt3_active_timeframe'
+const DEFAULT_SYMBOL_TICKER = 'NIFTY BANK' // Default instrument when no persisted selection
 
 export const useChartStore = defineStore('chart', () => {
   const symbols = ref([])
@@ -48,12 +49,14 @@ export const useChartStore = defineStore('chart', () => {
     const { data } = await axios.get('/api/v1/chart/symbols')
     symbols.value = data
     if (data.length) {
-      // Validate persisted symbol still exists, otherwise fall back to first
+      // Validate persisted symbol still exists, otherwise fall back to NIFTY BANK → first
       const persisted = activeSymbolId.value
       const valid = persisted && data.some(s => s.id === persisted)
       if (!valid) {
-        activeSymbolId.value = data[0].id
-        try { localStorage.setItem(PERSIST_KEY, String(data[0].id)) } catch {}
+        const defaultSymbol = data.find(s => s.ticker === DEFAULT_SYMBOL_TICKER)
+        const fallbackId = defaultSymbol ? defaultSymbol.id : data[0].id
+        activeSymbolId.value = fallbackId
+        try { localStorage.setItem(PERSIST_KEY, String(fallbackId)) } catch {}
       }
     }
   }

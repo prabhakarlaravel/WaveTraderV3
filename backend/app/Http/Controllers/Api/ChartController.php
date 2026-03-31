@@ -25,6 +25,7 @@ use App\Services\DataSources\DataSourceInterface;
 use App\Services\DataSources\OANDADataSource;
 use App\Services\DataSources\YahooDataSource;
 use App\Services\DataSources\ZerodhaDataSource;
+use App\Services\LiveFeed\LiveFeedResolver;
 use App\Jobs\RunEnginesJob;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -40,7 +41,11 @@ class ChartController extends Controller
      * Fetch latest candles from exchange → upsert DB → publish to Redis →
      * broadcast via Reverb → return fresh candles.
      *
-     * Full pipeline: Exchange API → DB → Redis Pub/Sub → Reverb WebSocket → Echo → Vue chart
+     * Uses market-specific LiveFeed services:
+     * - CryptoLiveFeed: 24/7 Binance feed (UTC timestamps)
+     * - NSELiveFeed: 09:15–15:30 IST weekdays, Zerodha (IST timestamps)
+     * - ForexLiveFeed: Sun 22:00 – Fri 22:00 UTC, OANDA/Yahoo
+     *
      * Called every 30s by frontend polling.
      */
     public function fetchLatest(Request $request): JsonResponse
@@ -52,100 +57,42 @@ class ChartController extends Controller
 
         $symbol = Symbol::findOrFail($request->symbol_id);
         $timeframe = $request->timeframe;
-        $aggregatedCandles = [];
+        $limit = (int) $request->query('limit', 5);
 
-        try {
-            $dataSource = $this->resolveDataSource($symbol->exchange);
-
-            // Step 1: Fetch last 15 minutes of 1M candles from exchange
-            // (15 min window ensures we catch up after any gaps/pauses)
-            $from = Carbon::now()->utc()->subMinutes(15);
-            $to = Carbon::now()->utc();
-            $fetched = $dataSource->fetchCandles($symbol->ticker, '1M', $from, $to);
-
-            if ($fetched->isNotEmpty()) {
-                // Step 2: Upsert to DB (rule #2: INSERT ... ON CONFLICT DO UPDATE)
-                $mapped = $fetched->map(fn (array $c) => [...$c, 'symbol_id' => $symbol->id])->toArray();
-                Candle::upsertCandles($mapped);
-
-                // Step 3: Publish 1M candle to Redis channel (rule #4)
-                $latestCandle = $fetched->last();
-                $this->publishToRedis($symbol->ticker, '1M', $latestCandle);
-
-                // Step 4: Broadcast 1M CandleUpdated via Reverb WebSocket
-                $this->broadcastCandle($symbol->ticker, '1M', $latestCandle);
-
-                // Step 5: Aggregate higher TFs from 1M base (rule #10)
-                $aggregator = new CandleAggregationService();
-                $aggregatedCandles = $aggregator->aggregateFromOneMinute($symbol->id);
-
-                // Step 6: Publish + broadcast each aggregated higher TF
-                foreach ($aggregatedCandles as $tf => $candleData) {
-                    if ($candleData) {
-                        $this->publishToRedis($symbol->ticker, $tf, $candleData);
-                        $this->broadcastCandle($symbol->ticker, $tf, $candleData);
-                    }
-                }
-
-                Log::debug("fetchLatest: {$symbol->ticker} — {$fetched->count()} 1M candles, " .
-                    count($aggregatedCandles) . " TFs aggregated, Redis+Reverb published");
-
-                // Step 7: Dispatch engine run for the requested timeframe (rule #8: queued, never synchronous)
-                try {
-                    RunEnginesJob::dispatch($symbol->id, $timeframe);
-                } catch (\Throwable $je) {
-                    // Queue not available — run engines inline as fallback
-                    Log::debug("Engine job dispatch skipped (queue unavailable): {$je->getMessage()}");
-                }
-            }
-        } catch (\Throwable $e) {
-            Log::warning("fetchLatest failed for {$symbol->ticker}: {$e->getMessage()}");
-        }
-
-        // Return last N candles for the requested timeframe
-        $limit = $request->query('limit', 5);
-        $candles = Candle::forSymbol($symbol->id, $timeframe)
-            ->orderByDesc('timestamp')
-            ->limit((int) $limit)
-            ->get()
-            ->sortBy('timestamp')
-            ->values();
+        // Resolve market-specific live feed service
+        $liveFeed = LiveFeedResolver::resolve($symbol);
+        $candles = $liveFeed->fetchLatest($symbol, $timeframe, $limit);
 
         return response()->json($candles);
     }
 
     /**
-     * Publish candle to Redis Pub/Sub channel for SSE streaming (rule #4).
+     * Get market status for the symbol's exchange (open/closed, session info, next open).
      */
-    private function publishToRedis(string $symbol, string $timeframe, array $candle): void
+    public function marketStatus(Request $request): JsonResponse
     {
-        try {
-            $channel = "candles:{$symbol}:{$timeframe}";
-            Redis::publish($channel, json_encode([
-                'symbol' => $symbol,
-                'timeframe' => $timeframe,
-                'candle' => $candle,
-                'published_at' => now()->utc()->toIso8601String(),
-            ]));
-        } catch (\Throwable $e) {
-            Log::debug("Redis publish skipped: {$e->getMessage()}");
-        }
-    }
+        $request->validate([
+            'symbol_id' => 'nullable|exists:symbols,id',
+        ]);
 
-    /**
-     * Broadcast CandleUpdated event via Laravel Reverb WebSocket.
-     */
-    private function broadcastCandle(string $symbol, string $timeframe, array $candle): void
-    {
-        try {
-            broadcast(new CandleUpdated($symbol, $timeframe, $candle));
-        } catch (\Throwable $e) {
-            Log::debug("Reverb broadcast skipped: {$e->getMessage()}");
+        if ($request->symbol_id) {
+            $symbol = Symbol::findOrFail($request->symbol_id);
+            $liveFeed = LiveFeedResolver::resolve($symbol);
+
+            return response()->json([
+                'symbol' => $symbol->ticker,
+                'marketType' => $liveFeed->getMarketType(),
+                ...$liveFeed->getMarketStatus(),
+            ]);
         }
+
+        // No symbol — return all market statuses
+        return response()->json(LiveFeedResolver::getAllMarketStatus());
     }
 
     /**
      * Resolve data source adapter based on exchange name.
+     * Used by non-LiveFeed endpoints (gap fill, historical bootstrap, etc.)
      */
     private function resolveDataSource(string $exchange): DataSourceInterface
     {
