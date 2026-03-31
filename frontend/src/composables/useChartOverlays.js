@@ -1,10 +1,11 @@
 import { watch, ref, nextTick } from 'vue'
 import { LineSeries } from 'lightweight-charts'
 import { toISTEpoch } from '../utils/timezone'
+import { createProjectileRenderer } from './useWaveProjectile'
 
 /**
- * Full SVG overlay system for rendering waves, OBs, FVGs, BOS/CHOCH, VWAP
- * on top of the lightweight-charts canvas.
+ * Full SVG overlay system for rendering waves, OBs, FVGs, BOS/CHOCH, VWAP,
+ * and wave projectile projections on top of the lightweight-charts canvas.
  */
 export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayToggles) {
   let vwapSeries = null
@@ -55,6 +56,13 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     containerEl = el
   }
 
+  // ── Wave Projectile renderer (lazy-initialized) ──
+  let projectile = null
+  function getProjectileRenderer() {
+    if (!projectile) projectile = createProjectileRenderer(getX, getY, toUnix)
+    return projectile
+  }
+
   // ── Render all overlays ──
   function renderAll() {
     if (!chartRef.value || !candleSeriesRef.value || !containerEl) return
@@ -73,9 +81,9 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     const overlays = chartStore.overlays
     if (!overlays) return
 
-    const toggles = overlayToggles?.value || { waves: true, ob: true, fvg: true, bos: true, vwap: true, signals: true }
+    const toggles = overlayToggles?.value || { waves: true, ob: true, fvg: true, bos: true, vwap: true, signals: true, projectile: true }
 
-    // Render order: VWAP bands → FVG zones → OB zones → BOS/CHOCH → Wave lines + labels → Signal markers
+    // Render order: VWAP bands → FVG zones → OB zones → BOS/CHOCH → Wave lines + labels → Projectile → Signal markers
     if (toggles.vwap) renderVwap(overlays.vwap || [], svg)
     if (toggles.fvg) renderFVGs(overlays.fvgs || [], svg, w)
     if (toggles.ob) renderOBs(overlays.orderBlocks || [], svg, w)
@@ -83,8 +91,15 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     if (toggles.ob) renderLiquidityPools(overlays.liquidityPools || [], svg, w)
     if (toggles.bos) renderBos(overlays.bos || [], svg)
     if (toggles.waves) renderWaveLabels(overlays.waveLabels || [], svg)
-    if (toggles.waves) renderWaveTargets(overlays.nextTargets || {}, svg, w)
-    if (toggles.waves) renderWaveTimeEstimate(overlays.timeEstimate || {}, svg, w, h)
+
+    // Projectile replaces the simpler wave targets + time estimate when enabled
+    if (toggles.projectile) {
+      try { getProjectileRenderer().render(svg, w, h, overlays) } catch (e) { /* projectile render error */ }
+    } else {
+      if (toggles.waves) renderWaveTargets(overlays.nextTargets || {}, svg, w)
+      if (toggles.waves) renderWaveTimeEstimate(overlays.timeEstimate || {}, svg, w, h)
+    }
+
     if (toggles.signals) { try { renderSignalMarkers() } catch (e) { /* markers may fail if series not ready */ } }
   }
 

@@ -17,7 +17,7 @@ let resizeObserver = null
 
 const timeframes = ['1M', '5M', '15M', '1H', '4H', '1D']
 const speeds = [0.5, 1, 2, 5, 10, 50]
-const overlayToggles = ref({ waves: true, ob: true, fvg: false, bos: false, vwap: false })
+const overlayToggles = ref({ waves: true, ob: true, fvg: false, bos: false, vwap: false, projectile: true })
 const rightPanel = ref('trade') // 'trade' | 'matrix' | 'results'
 
 // Config — use chartStore's persisted symbol as default
@@ -218,6 +218,7 @@ watch(() => rightPanel.value, (v) => {
 
       <template v-for="o in [
         { key: 'waves', label: 'Waves', color: '#8b5cf6' },
+        { key: 'projectile', label: 'Proj', color: '#34d399' },
         { key: 'ob', label: 'OB', color: '#f59e0b' },
         { key: 'fvg', label: 'FVG', color: '#06b6d4' },
         { key: 'bos', label: 'BOS', color: '#10b981' },

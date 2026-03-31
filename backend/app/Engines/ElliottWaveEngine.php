@@ -408,10 +408,13 @@ class ElliottWaveEngine implements EngineInterface
         $nextWave = null;
         $retracements = [];
 
-        // Determine trend direction from wave 1→2
+        // Determine trend direction: in a bullish impulse, wave 1 (high) > wave 2 (low pullback)
+        // In a bearish impulse, wave 1 (low) < wave 2 (high pullback)
         $isBullish = true;
         if (isset($byLabel['1'], $byLabel['2'])) {
-            $isBullish = $byLabel['2']['price'] > $byLabel['1']['price'];
+            $isBullish = $byLabel['1']['price'] > $byLabel['2']['price'];
+        } elseif (isset($byLabel['1'])) {
+            $isBullish = ($byLabel['1']['type'] ?? '') === 'high';
         }
         $dir = $isBullish ? 1 : -1;
 
