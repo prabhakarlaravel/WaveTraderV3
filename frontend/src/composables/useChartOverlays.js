@@ -6,7 +6,7 @@ import { toISTEpoch } from '../utils/timezone'
  * Full SVG overlay system for rendering waves, OBs, FVGs, BOS/CHOCH, VWAP
  * on top of the lightweight-charts canvas.
  */
-export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayToggles, drawingRenderer = null) {
+export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayToggles) {
   let vwapSeries = null
   let vwapU1Series = null
   let vwapL1Series = null
@@ -86,9 +86,6 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     if (toggles.waves) renderWaveTargets(overlays.nextTargets || {}, svg, w)
     if (toggles.waves) renderWaveTimeEstimate(overlays.timeEstimate || {}, svg, w, h)
     if (toggles.signals) { try { renderSignalMarkers() } catch (e) { /* markers may fail if series not ready */ } }
-
-    // Render user drawings (injected from useDrawingTools)
-    try { if (drawingRenderer) drawingRenderer(svg, w, h) } catch (e) { /* drawing render error */ }
   }
 
   // ── VWAP with bands ──
@@ -772,16 +769,31 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     }
   }
 
-  // Re-render on scroll/zoom
-  function attachChartListeners() {
-    if (!chartRef.value) return
-    chartRef.value.timeScale().subscribeVisibleLogicalRangeChange(() => {
-      nextTick(renderAll)
+  // Throttled render — max one per animation frame for scroll/zoom
+  let scrollRAF = null
+  function throttledRender() {
+    if (scrollRAF) return
+    scrollRAF = requestAnimationFrame(() => {
+      scrollRAF = null
+      renderAll()
     })
   }
 
-  // Watch for overlay data changes
-  watch(() => chartStore.overlays, () => nextTick(renderAll), { deep: true })
+  // Re-render on scroll/zoom
+  function attachChartListeners() {
+    if (!chartRef.value) return
+    chartRef.value.timeScale().subscribeVisibleLogicalRangeChange(throttledRender)
+  }
+
+  // Watch for overlay data changes — throttle via rAF to batch rapid updates
+  let overlayRAF = null
+  watch(() => chartStore.overlays, () => {
+    if (overlayRAF) return
+    overlayRAF = requestAnimationFrame(() => {
+      overlayRAF = null
+      renderAll()
+    })
+  }, { deep: true })
 
   return { renderAll, cleanup, attachChartListeners, setContainer }
 }

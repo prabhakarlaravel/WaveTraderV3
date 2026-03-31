@@ -4,9 +4,6 @@ import { createChart, CandlestickSeries, HistogramSeries } from 'lightweight-cha
 import { useChartStore } from '../stores/useChartStore'
 import { useRealtimeStore } from '../stores/useRealtimeStore'
 import { useChartOverlays } from '../composables/useChartOverlays'
-import { useDrawingTools } from '../composables/useDrawingTools'
-import { useDrawingStore } from '../stores/useDrawingStore'
-import DrawingToolbar from '../components/chart/DrawingToolbar.vue'
 import SymbolSelector from '../components/shared/SymbolSelector.vue'
 import SignalFeed from '../components/panels/SignalFeed.vue'
 import TradePanel from '../components/panels/TradePanel.vue'
@@ -16,7 +13,6 @@ import { useTradeStore } from '../stores/useTradeStore'
 const chartStore = useChartStore()
 const realtime = useRealtimeStore()
 const tradeStore = useTradeStore()
-const drawingStore = useDrawingStore()
 const rightPanel = ref('trade') // 'trade' | 'signals'
 
 const chartContainer = ref(null)
@@ -39,7 +35,7 @@ const syncAgoText = computed(() => {
 
 const timeframes = ['1M', '5M', '15M', '1H', '4H', '1D']
 const showMatrix = ref(true)
-const overlayToggles = ref({ waves: true, ob: true, fvg: true, bos: true, vwap: true, signals: true })
+const overlayToggles = ref({ waves: true, ob: true, fvg: false, bos: false, vwap: false, signals: true })
 
 const overlayConfig = [
   { key: 'waves', label: 'Waves', color: '#8b5cf6' },
@@ -151,19 +147,17 @@ function initChart() {
   resizeObserver.observe(chartContainer.value)
 }
 
-// Drawing tools
-const {
-  activeTool: drawActiveTool,
-  isDrawingMode,
-  drawingState,
-  selectTool: drawSelectTool,
-  cancelDrawing,
-  onMouseDown: drawMouseDown,
-  onMouseMove: drawMouseMove,
-  renderDrawings,
-} = useDrawingTools(chartRef, candleSeriesRef, chartContainer, drawingStore)
+const { renderAll, cleanup, attachChartListeners, setContainer } = useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayToggles)
 
-const { renderAll, cleanup, attachChartListeners, setContainer } = useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayToggles, renderDrawings)
+// Debounced render to consolidate multiple rapid triggers into one frame
+let renderRAF = null
+function debouncedRender() {
+  if (renderRAF) return
+  renderRAF = requestAnimationFrame(() => {
+    renderRAF = null
+    renderAll()
+  })
+}
 
 let lastSetDataLength = 0
 let lastRenderedSymbolId = null
@@ -206,26 +200,43 @@ function updateChartData() {
   updateWaveMatrix()
 }
 
+// Pause sync timer when tab is hidden to save CPU
+let isTabVisible = true
+function onVisibilityChange() {
+  isTabVisible = document.visibilityState === 'visible'
+  if (isTabVisible) {
+    nowTick.value = Date.now()
+    debouncedRender() // re-render overlays when tab becomes visible
+  }
+}
+
 onMounted(async () => {
   initChart()
   setContainer(chartContainer.value)
   attachChartListeners()
   await chartStore.fetchSymbols()
-  drawingStore.setContext(chartStore.activeSymbolId, chartStore.activeTimeframe)
   await chartStore.fetchCandles()
   tradeStore.fetchTrades()
   updateChartData()
   renderAll()
+
+  // Sync timer — only ticks when tab is visible
+  syncTickInterval = setInterval(() => { if (isTabVisible) nowTick.value = Date.now() }, 1000)
+  document.addEventListener('visibilitychange', onVisibilityChange)
 })
 
-onMounted(() => { syncTickInterval = setInterval(() => { nowTick.value = Date.now() }, 1000) })
-onUnmounted(() => { cleanup(); resizeObserver?.disconnect(); chartRef.value?.remove(); clearInterval(syncTickInterval) })
-watch(() => chartStore.formattedCandles, () => { updateChartData(); renderAll() })
-watch(overlayToggles, () => renderAll(), { deep: true })
-watch([() => chartStore.activeSymbolId, () => chartStore.activeTimeframe], ([sid, tf]) => {
-  drawingStore.setContext(sid, tf)
+onUnmounted(() => {
+  cleanup()
+  resizeObserver?.disconnect()
+  chartRef.value?.remove()
+  clearInterval(syncTickInterval)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  if (renderRAF) cancelAnimationFrame(renderRAF)
 })
-watch(() => drawingStore.currentDrawings, () => renderAll(), { deep: true })
+
+// Consolidated watchers — all use debouncedRender to avoid multiple renderAll() per frame
+watch(() => chartStore.formattedCandles, () => { updateChartData(); debouncedRender() })
+watch(overlayToggles, () => debouncedRender(), { deep: true })
 </script>
 
 <template>
@@ -257,16 +268,6 @@ watch(() => drawingStore.currentDrawings, () => renderAll(), { deep: true })
         <span class="overlay-dot" :style="{ background: overlayToggles[o.key] ? o.color : 'var(--dim)' }"></span>
         {{ o.label }}
       </button>
-
-      <div class="toolbar-sep"></div>
-
-      <!-- Drawing tools -->
-      <DrawingToolbar
-        :active-tool="drawActiveTool"
-        :drawing-count="drawingStore.currentDrawings.length"
-        @select="drawSelectTool"
-        @clear-all="drawingStore.clearAll"
-      />
 
       <div class="toolbar-spacer"></div>
 
@@ -316,14 +317,7 @@ watch(() => drawingStore.currentDrawings, () => renderAll(), { deep: true })
     <div class="main-area">
       <!-- Chart column -->
       <div class="chart-col">
-        <div ref="chartContainer" class="chart-container">
-          <!-- Drawing interaction layer — captures mouse events when drawing mode active -->
-          <div v-if="isDrawingMode"
-            class="drawing-layer"
-            @mousedown="drawMouseDown"
-            @mousemove="drawMouseMove"
-          ></div>
-        </div>
+        <div ref="chartContainer" class="chart-container"></div>
 
         <!-- Bias strip below chart -->
         <div class="bias-strip">
@@ -449,7 +443,6 @@ watch(() => drawingStore.currentDrawings, () => renderAll(), { deep: true })
 .main-area { flex: 1; display: flex; overflow: hidden; }
 .chart-col { flex: 1; display: flex; flex-direction: column; gap: 6px; padding: 8px; min-width: 0; }
 .chart-container { flex: 1; background: var(--bg); border-radius: 10px; border: 1px solid var(--border); overflow: hidden; position: relative; }
-.drawing-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 20; background: transparent; }
 
 /* ── Bias strip ── */
 .bias-strip { display: flex; gap: 6px; }

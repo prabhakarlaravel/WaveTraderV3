@@ -23,27 +23,91 @@ export const useChartStore = defineStore('chart', () => {
     symbols.value.find((s) => s.id === activeSymbolId.value)
   )
 
-  const formattedCandles = computed(() =>
-    candles.value.map((c) => ({
-      time: toISTEpoch(c.timestamp),
-      open: parseFloat(c.open),
-      high: parseFloat(c.high),
-      low: parseFloat(c.low),
-      close: parseFloat(c.close),
-    }))
-  )
+  // Cached formatted arrays — only reformat when candles actually change
+  // Uses a generation counter to avoid full O(n) remap on every live tick
+  let _cachedCandles = []
+  let _cachedVolume = []
+  let _cachedLength = 0
+  let _cachedGeneration = 0
 
-  const formattedVolume = computed(() =>
-    candles.value.map((c) => {
-      const open = parseFloat(c.open)
-      const close = parseFloat(c.close)
-      return {
+  const formattedCandles = computed(() => {
+    const raw = candles.value
+    const len = raw.length
+    if (len === 0) { _cachedCandles = []; _cachedLength = 0; return _cachedCandles }
+
+    // Full remap only when array size changes significantly (symbol/TF switch)
+    if (Math.abs(len - _cachedLength) > 2 || _cachedLength === 0) {
+      _cachedCandles = raw.map((c) => ({
         time: toISTEpoch(c.timestamp),
-        value: parseFloat(c.volume),
+        open: parseFloat(c.open),
+        high: parseFloat(c.high),
+        low: parseFloat(c.low),
+        close: parseFloat(c.close),
+      }))
+      _cachedLength = len
+    } else {
+      // Incremental: update only the last candle (live tick) and append new ones
+      while (_cachedCandles.length < len) {
+        const c = raw[_cachedCandles.length]
+        _cachedCandles.push({
+          time: toISTEpoch(c.timestamp),
+          open: parseFloat(c.open),
+          high: parseFloat(c.high),
+          low: parseFloat(c.low),
+          close: parseFloat(c.close),
+        })
+      }
+      // Always update the last candle (forming candle)
+      const last = raw[len - 1]
+      _cachedCandles[len - 1] = {
+        time: toISTEpoch(last.timestamp),
+        open: parseFloat(last.open),
+        high: parseFloat(last.high),
+        low: parseFloat(last.low),
+        close: parseFloat(last.close),
+      }
+      _cachedLength = len
+    }
+    return _cachedCandles
+  })
+
+  const formattedVolume = computed(() => {
+    const raw = candles.value
+    const len = raw.length
+    if (len === 0) { _cachedVolume = []; return _cachedVolume }
+
+    if (Math.abs(len - _cachedVolume.length) > 2 || _cachedVolume.length === 0) {
+      _cachedVolume = raw.map((c) => {
+        const open = parseFloat(c.open)
+        const close = parseFloat(c.close)
+        return {
+          time: toISTEpoch(c.timestamp),
+          value: parseFloat(c.volume),
+          color: close >= open ? 'rgba(38, 166, 154, 0.3)' : 'rgba(239, 83, 80, 0.3)',
+        }
+      })
+    } else {
+      while (_cachedVolume.length < len) {
+        const c = raw[_cachedVolume.length]
+        const open = parseFloat(c.open)
+        const close = parseFloat(c.close)
+        _cachedVolume.push({
+          time: toISTEpoch(c.timestamp),
+          value: parseFloat(c.volume),
+          color: close >= open ? 'rgba(38, 166, 154, 0.3)' : 'rgba(239, 83, 80, 0.3)',
+        })
+      }
+      const last = raw[len - 1]
+      const open = parseFloat(last.open)
+      const close = parseFloat(last.close)
+      _cachedVolume[len - 1] = {
+        time: toISTEpoch(last.timestamp),
+        value: parseFloat(last.volume),
         color: close >= open ? 'rgba(38, 166, 154, 0.3)' : 'rgba(239, 83, 80, 0.3)',
       }
-    })
-  )
+    }
+    return _cachedVolume
+  })
 
   async function fetchSymbols() {
     const { data } = await axios.get('/api/v1/chart/symbols')
