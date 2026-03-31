@@ -145,49 +145,47 @@ class ChartController extends Controller
             return response()->json($cached);
         }
 
-        // Cache miss — return DB-persisted subset with stale flag.
-        // Dispatch a one-off engine run to warm the cache.
-        RunEnginesJob::dispatch($symbolId, $timeframe)->onQueue('engines');
+        // Cache miss — compute live, cache result, and dispatch background job for next time.
+        // This ensures overlays are always available even without a running queue worker.
+        $symbol = Symbol::findOrFail($symbolId);
 
-        $signals = Signal::where('symbol_id', $symbolId)
+        $candles = Candle::where('symbol_id', $symbolId)
             ->where('timeframe', $timeframe)
-            ->orderByDesc('candle_timestamp')
-            ->limit(200)
+            ->orderBy('timestamp')
             ->get()
             ->toArray();
 
-        $orderBlocks = OrderBlock::where('symbol_id', $symbolId)
-            ->where('timeframe', $timeframe)
-            ->where('status', '!=', 'fully_mitigated')
-            ->get()
-            ->toArray();
+        if (empty($candles)) {
+            return response()->json([
+                'signals' => [], 'orderBlocks' => [], 'fvgs' => [], 'swings' => [],
+                'waveLabels' => [], 'subLegs' => [], 'bos' => [], 'vwap' => [],
+                'patterns' => [], 'fibTargets' => [], 'nextTargets' => [],
+                'timeEstimate' => [], 'liquidityPools' => [], 'oteZones' => [],
+                'premiumDiscount' => [], 'inducements' => [], 'confluence' => null,
+                'metadata' => ['trend' => 'neutral', 'elliott_wave' => [], 'smc' => []],
+                'computed_at' => null,
+            ]);
+        }
 
-        $fvgs = FVG::where('symbol_id', $symbolId)
-            ->where('timeframe', $timeframe)
-            ->where('fill_pct', '<', 100)
-            ->get()
-            ->toArray();
+        // Run engines synchronously to warm the cache on first request
+        $job = new RunEnginesJob($symbolId, $timeframe);
+        $job->handle();
 
+        // Read the freshly cached result
+        $freshCache = RunEnginesJob::getCachedOverlays($symbolId, $timeframe);
+
+        if ($freshCache) {
+            return response()->json($freshCache);
+        }
+
+        // Shouldn't reach here, but fallback to empty
         return response()->json([
-            'signals' => $signals,
-            'orderBlocks' => $orderBlocks,
-            'fvgs' => $fvgs,
-            'swings' => [],
-            'waveLabels' => [],
-            'subLegs' => [],
-            'bos' => [],
-            'vwap' => [],
-            'patterns' => [],
-            'fibTargets' => [],
-            'nextTargets' => [],
-            'timeEstimate' => [],
-            'liquidityPools' => [],
-            'oteZones' => [],
-            'premiumDiscount' => [],
-            'inducements' => [],
-            'confluence' => null,
+            'signals' => [], 'orderBlocks' => [], 'fvgs' => [], 'swings' => [],
+            'waveLabels' => [], 'subLegs' => [], 'bos' => [], 'vwap' => [],
+            'patterns' => [], 'fibTargets' => [], 'nextTargets' => [],
+            'timeEstimate' => [], 'liquidityPools' => [], 'oteZones' => [],
+            'premiumDiscount' => [], 'inducements' => [], 'confluence' => null,
             'metadata' => ['trend' => 'neutral', 'elliott_wave' => [], 'smc' => []],
-            'stale' => true,
             'computed_at' => null,
         ]);
     }
