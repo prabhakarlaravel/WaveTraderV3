@@ -11,6 +11,104 @@ services:
     volumes:
       - wavetrader_pgdata:/var/lib/postgresql/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wavetrader"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: wavetrader_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - wavetrader_redis:/data
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save 60 1000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Laravel Reverb WebSocket server — handles all real-time broadcasting
+  reverb:
+    build:
+      context: ../backend
+      dockerfile: ../docker/Dockerfile.php
+    container_name: wavetrader_reverb
+    command: php artisan reverb:start --host=0.0.0.0 --port=8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file: ../backend/.env
+    restart: unless-stopped
+
+  # Laravel Horizon — manages queue workers for default + engines queues
+  horizon:
+    build:
+      context: ../backend
+      dockerfile: ../docker/Dockerfile.php
+    container_name: wavetrader_horizon
+    command: php artisan horizon
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file: ../backend/.env
+    restart: unless-stopped
+
+  # Laravel Scheduler — runs candles:fetch --all every 30s + zerodha token renewal
+  scheduler:
+    build:
+      context: ../backend
+      dockerfile: ../docker/Dockerfile.php
+    container_name: wavetrader_scheduler
+    command: php artisan schedule:work
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file: ../backend/.env
+    restart: unless-stopped
+
+  # PHP-FPM for the Laravel API
+  app:
+    build:
+      context: ../backend
+      dockerfile: ../docker/Dockerfile.php
+    container_name: wavetrader_app
+    volumes:
+      - ../backend:/var/www/html
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file: ../backend/.env
+    restart: unless-stopped
+
+  # Nginx reverse proxy — API + WebSocket upgrade to Reverb
+  nginx:
+    image: nginx:alpine
+    container_name: wavetrader_nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ../backend/public:/var/www/html/public:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+      - reverb
+    restart: unless-stopped
 
 volumes:
   wavetrader_pgdata:
+  wavetrader_redis:

@@ -36,7 +36,9 @@ return [
             'options' => [
                 'tls' => [],
             ],
-            'max_request_size' => env('REVERB_MAX_REQUEST_SIZE', 10_000),
+            // Engine overlay payloads (7 engines × wave labels + OBs + FVGs + signals)
+            // can reach 50-100KB for symbols with dense structure. 500KB is safe headroom.
+            'max_request_size' => env('REVERB_MAX_REQUEST_SIZE', 500_000),
             'scaling' => [
                 'enabled' => env('REVERB_SCALING_ENABLED', false),
                 'channel' => env('REVERB_SCALING_CHANNEL', 'reverb'),
@@ -83,10 +85,10 @@ return [
                     'useTLS' => env('REVERB_SCHEME', 'https') === 'https',
                 ],
                 'allowed_origins' => ['*'],
-                'ping_interval' => env('REVERB_APP_PING_INTERVAL', 60),
-                'activity_timeout' => env('REVERB_APP_ACTIVITY_TIMEOUT', 30),
-                'max_connections' => env('REVERB_APP_MAX_CONNECTIONS'),
-                'max_message_size' => env('REVERB_APP_MAX_MESSAGE_SIZE', 10_000),
+                'ping_interval' => env('REVERB_APP_PING_INTERVAL', 30),
+                'activity_timeout' => env('REVERB_APP_ACTIVITY_TIMEOUT', 120),
+                'max_connections' => env('REVERB_APP_MAX_CONNECTIONS', 100),
+                'max_message_size' => env('REVERB_APP_MAX_MESSAGE_SIZE', 500_000),
                 'accept_client_events_from' => env('REVERB_APP_ACCEPT_CLIENT_EVENTS_FROM', 'members'),
                 'rate_limiting' => [
                     'enabled' => env('REVERB_APP_RATE_LIMITING_ENABLED', false),

@@ -142,7 +142,9 @@ export const useChartStore = defineStore('chart', () => {
     }
   }
 
-  async function fetchOverlays() {
+  let _overlayRetryTimer = null
+
+  async function fetchOverlays(retryCount = 0) {
     if (!activeSymbolId.value) return
     try {
       const { data } = await axios.get('/api/v1/chart/overlays', {
@@ -151,6 +153,16 @@ export const useChartStore = defineStore('chart', () => {
           timeframe: activeTimeframe.value,
         },
       })
+
+      // Backend returns { computing: true } on cache miss — engines are running in background.
+      // Retry once after 3s to pick up the freshly computed overlays.
+      if (data.computing && retryCount < 2) {
+        console.log(`[Overlay] Cache miss — engines computing, retry #${retryCount + 1} in 3s`)
+        if (_overlayRetryTimer) clearTimeout(_overlayRetryTimer)
+        _overlayRetryTimer = setTimeout(() => fetchOverlays(retryCount + 1), 3000)
+        return
+      }
+
       overlays.value = data
     } catch {
       overlays.value = { signals: [], orderBlocks: [], fvgs: [] }

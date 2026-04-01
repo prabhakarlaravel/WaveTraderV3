@@ -12,6 +12,9 @@ export const useRealtimeStore = defineStore('realtime', () => {
   const wsActive = ref(false)
   const fetchCount = ref(0)
 
+  // Track when overlays were last received via WebSocket (to avoid redundant HTTP fetches)
+  let lastOverlayWsTime = 0
+
   // Market status from backend
   const marketStatus = ref(null)
   const marketOpen = computed(() => marketStatus.value?.open ?? true)
@@ -33,6 +36,14 @@ export const useRealtimeStore = defineStore('realtime', () => {
     if (!lastUpdate.value) return null
     return Math.floor((Date.now() - lastUpdate.value.getTime()) / 1000)
   })
+
+  /**
+   * Check if overlays were recently received via WebSocket.
+   * Used to skip redundant HTTP overlay fetches.
+   */
+  function overlaysReceivedViaWsRecently(withinMs = 5000) {
+    return (Date.now() - lastOverlayWsTime) < withinMs
+  }
 
   /**
    * Fetch market status from backend for current symbol.
@@ -59,6 +70,9 @@ export const useRealtimeStore = defineStore('realtime', () => {
     unsubscribeAll()
 
     if (!symbol) return
+
+    // Reset WS overlay timestamp on new subscription
+    lastOverlayWsTime = 0
 
     // Fetch market status first
     fetchMarketStatus()
@@ -115,6 +129,7 @@ export const useRealtimeStore = defineStore('realtime', () => {
         .listen('OverlaysUpdated', (e) => {
           if (e.overlays) {
             chartStore.overlays = e.overlays
+            lastOverlayWsTime = Date.now()
             lastUpdate.value = new Date()
             console.log(`[WS] OverlaysUpdated via Reverb: ${e.timeframe} @ ${e.computedAt}`)
           }
@@ -179,6 +194,9 @@ export const useRealtimeStore = defineStore('realtime', () => {
    * Fetch latest candles via the market-specific LiveFeed endpoint.
    * Backend handles market hours, IST/UTC conversion, and returns
    * DB candles if market is closed.
+   *
+   * Skips overlay HTTP fetch if overlays were recently pushed via WebSocket
+   * to avoid redundant double-fetch (WS push + HTTP poll both triggering overlays).
    */
   async function pollLatestCandles() {
     if (!chartStore.activeSymbolId || !chartStore.activeTimeframe) return
@@ -214,21 +232,32 @@ export const useRealtimeStore = defineStore('realtime', () => {
       chartStore.candles = [...existing]
       lastUpdate.value = new Date()
 
-      // Also refresh overlays since engines should re-run on new data
-      await chartStore.fetchOverlays()
+      // Only fetch overlays via HTTP if WebSocket hasn't delivered them recently.
+      // When Reverb is working, OverlaysUpdated arrives ~1-2s after candle update,
+      // so a 10s window is generous enough to avoid double-fetch.
+      if (!overlaysReceivedViaWsRecently(10000)) {
+        await chartStore.fetchOverlays()
+        console.log('[Poll] Overlays fetched via HTTP (no recent WS delivery)')
+      }
     }
   }
 
   /**
    * Handle incoming WebSocket candle update — append or update the last candle.
+   * Overlays will arrive separately via OverlaysUpdated event from RunEnginesJob.
+   * Only schedule an HTTP overlay fetch as fallback if WS overlay doesn't arrive
+   * within 5 seconds.
    */
   let overlayRefreshTimer = null
   function scheduleOverlayRefresh() {
     if (overlayRefreshTimer) clearTimeout(overlayRefreshTimer)
+    // Wait 5s — if OverlaysUpdated hasn't arrived via WS by then, fetch via HTTP
     overlayRefreshTimer = setTimeout(() => {
-      chartStore.fetchOverlays()
-      console.log('[WS] Overlays refreshed after candle update')
-    }, 2000)
+      if (!overlaysReceivedViaWsRecently(5000)) {
+        chartStore.fetchOverlays()
+        console.log('[WS] Overlays fallback HTTP fetch (WS overlay not received in 5s)')
+      }
+    }, 5000)
   }
 
   function onCandleUpdate(event) {
@@ -255,7 +284,11 @@ export const useRealtimeStore = defineStore('realtime', () => {
   }
 
   function onSignalUpdate() {
-    chartStore.fetchOverlays()
+    // Signals are part of the overlay payload pushed via OverlaysUpdated.
+    // Only fetch if WS overlay hasn't arrived recently.
+    if (!overlaysReceivedViaWsRecently(5000)) {
+      chartStore.fetchOverlays()
+    }
   }
 
   async function forceRefresh() {

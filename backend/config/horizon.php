@@ -197,7 +197,7 @@ return [
     */
 
     'defaults' => [
-        'supervisor-1' => [
+        'supervisor-default' => [
             'connection' => 'redis',
             'queue' => ['default'],
             'balance' => 'auto',
@@ -210,19 +210,46 @@ return [
             'timeout' => 60,
             'nice' => 0,
         ],
+
+        // Dedicated supervisor for engine computation jobs.
+        // Engines are CPU-heavy (7 engines × N candles) and must not starve
+        // the default queue. Higher process count allows concurrent engine
+        // runs for different symbol/TF combos.
+        'supervisor-engines' => [
+            'connection' => 'redis',
+            'queue' => ['engines'],
+            'balance' => 'auto',
+            'autoScalingStrategy' => 'time',
+            'maxProcesses' => 2,
+            'maxTime' => 0,
+            'maxJobs' => 0,
+            'memory' => 256,
+            'tries' => 2,
+            'timeout' => 90,
+            'nice' => 0,
+        ],
     ],
 
     'environments' => [
         'production' => [
-            'supervisor-1' => [
-                'maxProcesses' => 10,
+            'supervisor-default' => [
+                'maxProcesses' => 5,
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
+            ],
+            'supervisor-engines' => [
+                'maxProcesses' => 8,
+                'balanceMaxShift' => 2,
+                'balanceCooldown' => 3,
+                'memory' => 512,
             ],
         ],
 
         'local' => [
-            'supervisor-1' => [
+            'supervisor-default' => [
+                'maxProcesses' => 2,
+            ],
+            'supervisor-engines' => [
                 'maxProcesses' => 3,
             ],
         ],

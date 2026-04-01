@@ -18,6 +18,9 @@ taskkill /FI "WINDOWTITLE eq WaveTrader - Reverb WebSocket*" /F >nul 2>&1
 echo  Stopping Queue Worker...
 taskkill /FI "WINDOWTITLE eq WaveTrader - Queue Worker*" /F >nul 2>&1
 
+echo  Stopping Scheduler...
+taskkill /FI "WINDOWTITLE eq WaveTrader - Scheduler*" /F >nul 2>&1
+
 echo  Stopping Frontend...
 taskkill /FI "WINDOWTITLE eq WaveTrader - Frontend*" /F >nul 2>&1
 

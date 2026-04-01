@@ -18,7 +18,7 @@ set "FRONTEND_DIR=%PROJECT_DIR%\frontend"
 :: -----------------------------------------------
 :: 1. Check prerequisites
 :: -----------------------------------------------
-echo  [1/6] Checking prerequisites...
+echo  [1/7] Checking prerequisites...
 
 where php >nul 2>&1
 if %errorlevel% neq 0 (
@@ -38,7 +38,7 @@ echo    Node: OK
 :: -----------------------------------------------
 :: 2. Check PostgreSQL
 :: -----------------------------------------------
-echo  [2/6] Checking PostgreSQL...
+echo  [2/7] Checking PostgreSQL...
 netstat -an | findstr ":5432" | findstr "LISTENING" >nul 2>&1
 if %errorlevel% neq 0 (
     echo    WARNING: PostgreSQL not running. Attempting start...
@@ -55,7 +55,7 @@ echo    PostgreSQL: OK (port 5432)
 :: -----------------------------------------------
 :: 3. Check Redis
 :: -----------------------------------------------
-echo  [3/6] Checking Redis...
+echo  [3/7] Checking Redis...
 netstat -an | findstr ":6379" | findstr "LISTENING" >nul 2>&1
 if %errorlevel% neq 0 (
     echo    WARNING: Redis not running. Attempting start...
@@ -80,7 +80,7 @@ echo    Redis: OK (port 6379)
 :: -----------------------------------------------
 :: 4. Kill any existing WaveTrader processes
 :: -----------------------------------------------
-echo  [4/6] Cleaning up old processes...
+echo  [4/7] Cleaning up old processes...
 
 :: Kill by window title
 taskkill /FI "WINDOWTITLE eq WaveTrader -*" /F >nul 2>&1
@@ -98,7 +98,7 @@ echo    Cleanup: OK
 :: -----------------------------------------------
 :: 5. Run migrations
 :: -----------------------------------------------
-echo  [5/6] Running migrations...
+echo  [5/7] Running migrations...
 pushd "%BACKEND_DIR%"
 php artisan migrate --force --quiet >nul 2>&1
 if %errorlevel% equ 0 (
@@ -111,7 +111,7 @@ popd
 :: -----------------------------------------------
 :: 6. Start all services
 :: -----------------------------------------------
-echo  [6/6] Starting services...
+echo  [6/7] Starting services...
 echo.
 
 :: Backend API (Laravel)
@@ -132,9 +132,14 @@ echo    Starting Reverb WebSocket on ws://localhost:8085 ...
 start "WaveTrader - Reverb WebSocket" /D "%BACKEND_DIR%" cmd /c "php artisan reverb:start --port=8085"
 timeout /t 2 /nobreak >nul
 
-:: Queue Worker
+:: Queue Worker (engines first — time-critical 30s cycle, then default)
 echo    Starting Queue Worker...
-start "WaveTrader - Queue Worker" /D "%BACKEND_DIR%" cmd /c "php artisan queue:work redis --queue=default,engines --sleep=3 --tries=3"
+start "WaveTrader - Queue Worker" /D "%BACKEND_DIR%" cmd /c "php artisan queue:work redis --queue=engines,default --sleep=3 --tries=3 --timeout=90 --memory=256"
+timeout /t 1 /nobreak >nul
+
+:: Laravel Scheduler (candles:fetch --all every 30s + zerodha token renewal)
+echo    Starting Scheduler (30s candle fetch cycle)...
+start "WaveTrader - Scheduler" /D "%BACKEND_DIR%" cmd /c "php artisan schedule:work"
 timeout /t 1 /nobreak >nul
 
 :: Frontend (Vite)
@@ -143,8 +148,10 @@ start "WaveTrader - Frontend" /D "%FRONTEND_DIR%" cmd /c "npm run dev"
 timeout /t 4 /nobreak >nul
 
 :: -----------------------------------------------
-:: Verify all services
+:: 7. Verify all services
 :: -----------------------------------------------
+echo.
+echo  [7/7] Verifying services...
 echo.
 echo  ============================================
 echo   Service Status:
@@ -168,6 +175,24 @@ if %errorlevel% equ 0 (
     set "ALL_OK=0"
 )
 
+:: Scheduler runs as a background process (no port) — verify via window title
+tasklist /FI "WINDOWTITLE eq WaveTrader - Scheduler*" /NH 2>nul | findstr /I "cmd" >nul 2>&1
+if %errorlevel% equ 0 (
+    echo    [OK] Scheduler:     Running (30s candle fetch cycle)
+) else (
+    echo    [!!] Scheduler:     FAILED (candles won't auto-fetch)
+    set "ALL_OK=0"
+)
+
+:: Queue worker runs as background process — verify via window title
+tasklist /FI "WINDOWTITLE eq WaveTrader - Queue Worker*" /NH 2>nul | findstr /I "cmd" >nul 2>&1
+if %errorlevel% equ 0 (
+    echo    [OK] Queue Worker:  Running (engines,default)
+) else (
+    echo    [!!] Queue Worker:  FAILED (engines won't process)
+    set "ALL_OK=0"
+)
+
 netstat -an | findstr ":5173" | findstr "LISTENING" >nul 2>&1
 if %errorlevel% equ 0 (
     echo    [OK] Frontend SPA:  http://localhost:5173
@@ -184,6 +209,10 @@ if "%ALL_OK%"=="1" (
     echo  ============================================
     echo   All Services Started Successfully!
     echo  ============================================
+    echo.
+    echo   Real-time pipeline:
+    echo     Scheduler (30s) -^> FetchCandlesJob -^> RunEnginesJob
+    echo     -^> Redis cache -^> Reverb broadcast -^> Vue frontend
     echo.
     echo   Opening browser in 3 seconds...
     timeout /t 3 /nobreak >nul

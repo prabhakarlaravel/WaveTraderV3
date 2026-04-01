@@ -176,7 +176,9 @@ class RunEnginesJob implements ShouldQueue, ShouldBeUnique
     private function cacheOverlayPayload(int $symbolId, array $payload): void
     {
         $key = "overlays:{$symbolId}:{$this->timeframe}";
-        Redis::setex($key, 120, json_encode($payload));
+        // 300s TTL — generous safety net; cache is refreshed every 30s cycle anyway.
+        // Prevents stale reads from lasting more than 5 minutes even if fetcher stops.
+        Redis::setex($key, 300, json_encode($payload));
     }
 
     /**

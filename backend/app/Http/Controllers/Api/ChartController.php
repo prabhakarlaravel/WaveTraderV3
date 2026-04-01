@@ -145,41 +145,12 @@ class ChartController extends Controller
             return response()->json($cached);
         }
 
-        // Cache miss — compute live, cache result, and dispatch background job for next time.
-        // This ensures overlays are always available even without a running queue worker.
-        $symbol = Symbol::findOrFail($symbolId);
-
-        $candles = Candle::where('symbol_id', $symbolId)
+        // Cache miss — check if candles exist at all
+        $hasCandles = Candle::where('symbol_id', $symbolId)
             ->where('timeframe', $timeframe)
-            ->orderBy('timestamp')
-            ->get()
-            ->toArray();
+            ->exists();
 
-        if (empty($candles)) {
-            return response()->json([
-                'signals' => [], 'orderBlocks' => [], 'fvgs' => [], 'swings' => [],
-                'waveLabels' => [], 'subLegs' => [], 'bos' => [], 'vwap' => [],
-                'patterns' => [], 'fibTargets' => [], 'nextTargets' => [],
-                'timeEstimate' => [], 'liquidityPools' => [], 'oteZones' => [],
-                'premiumDiscount' => [], 'inducements' => [], 'confluence' => null,
-                'metadata' => ['trend' => 'neutral', 'elliott_wave' => [], 'smc' => []],
-                'computed_at' => null,
-            ]);
-        }
-
-        // Run engines synchronously to warm the cache on first request
-        $job = new RunEnginesJob($symbolId, $timeframe);
-        $job->handle();
-
-        // Read the freshly cached result
-        $freshCache = RunEnginesJob::getCachedOverlays($symbolId, $timeframe);
-
-        if ($freshCache) {
-            return response()->json($freshCache);
-        }
-
-        // Shouldn't reach here, but fallback to empty
-        return response()->json([
+        $emptyOverlay = [
             'signals' => [], 'orderBlocks' => [], 'fvgs' => [], 'swings' => [],
             'waveLabels' => [], 'subLegs' => [], 'bos' => [], 'vwap' => [],
             'patterns' => [], 'fibTargets' => [], 'nextTargets' => [],
@@ -187,7 +158,22 @@ class ChartController extends Controller
             'premiumDiscount' => [], 'inducements' => [], 'confluence' => null,
             'metadata' => ['trend' => 'neutral', 'elliott_wave' => [], 'smc' => []],
             'computed_at' => null,
-        ]);
+        ];
+
+        if (! $hasCandles) {
+            return response()->json($emptyOverlay);
+        }
+
+        // Dispatch engine run to background queue — overlays will arrive via
+        // Reverb OverlaysUpdated event. The frontend retries once after 3s
+        // if it receives an empty/computing response.
+        RunEnginesJob::dispatch($symbolId, $timeframe)->onQueue('engines');
+
+        // Return empty overlay with a 'computing' flag so frontend knows to wait
+        $emptyOverlay['computing'] = true;
+        $emptyOverlay['computed_at'] = null;
+
+        return response()->json($emptyOverlay);
     }
 
     /**
