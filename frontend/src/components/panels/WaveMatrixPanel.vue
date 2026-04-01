@@ -24,9 +24,14 @@ async function fetchMtfWaves() {
         symbol_id: chartStore.activeSymbolId,
         timeframe: chartStore.activeTimeframe,
       },
+      timeout: 15000, // 15s timeout — avoid hanging on slow engine fallback
     })
     mtfData.value = data
     lastRefresh.value = new Date()
+    // Push confluence to chartStore so LiveChart bias strip can use it as fallback
+    if (data.confluence) {
+      chartStore.setMtfConfluence(data.confluence)
+    }
   } catch { /* ignore */ }
   finally { loading.value = false }
 }
@@ -55,10 +60,9 @@ watch(() => chartStore.overlays, () => {
 
 /**
  * Confluence — SINGLE SOURCE OF TRUTH from backend.
- * v3.2: Read from mtfData (which includes confluence from backend)
- * Falls back to overlays.confluence for backward compat.
+ * Priority: overlays.confluence (refreshed every 30s via poll/WS) > mtfData.confluence (from mtf-waves endpoint).
  */
-const confluence = computed(() => mtfData.value?.confluence || chartStore.overlays?.confluence || null)
+const confluence = computed(() => chartStore.overlays?.confluence || mtfData.value?.confluence || null)
 
 /**
  * Call/Put recommendation — 100% from backend ConfluenceEngine.

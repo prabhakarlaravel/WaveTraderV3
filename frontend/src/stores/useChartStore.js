@@ -157,14 +157,16 @@ export const useChartStore = defineStore('chart', () => {
       })
 
       // Backend returns { computing: true } on cache miss — engines are running in background.
-      // Retry once after 3s to pick up the freshly computed overlays.
-      if (data.computing && retryCount < 2) {
-        console.log(`[Overlay] Cache miss — engines computing, retry #${retryCount + 1} in 3s`)
+      // Retry up to 4 times with increasing delays to pick up freshly computed overlays.
+      if (data.computing && retryCount < 4) {
+        const delay = retryCount < 2 ? 3000 : 5000 // 3s, 3s, 5s, 5s
+        console.log(`[Overlay] Cache miss — engines computing, retry #${retryCount + 1} in ${delay/1000}s`)
         if (_overlayRetryTimer) clearTimeout(_overlayRetryTimer)
-        _overlayRetryTimer = setTimeout(() => fetchOverlays(retryCount + 1), 3000)
+        _overlayRetryTimer = setTimeout(() => fetchOverlays(retryCount + 1), delay)
         return
       }
 
+      // Always set overlays (even if still computing after retries exhausted)
       overlays.value = data
     } catch {
       overlays.value = { signals: [], orderBlocks: [], fvgs: [] }
@@ -214,6 +216,17 @@ export const useChartStore = defineStore('chart', () => {
     } catch { /* background task — silent */ }
   }
 
+  /**
+   * mtfConfluence: populated by WaveMatrixPanel from the mtf-waves endpoint.
+   * Used as fallback when overlays.confluence is null (cache miss / computing).
+   * This ensures bottom bias cards in LiveChart always have data.
+   */
+  const mtfConfluence = ref(null)
+
+  function setMtfConfluence(c) {
+    mtfConfluence.value = c
+  }
+
   return {
     symbols,
     activeSymbolId,
@@ -224,11 +237,13 @@ export const useChartStore = defineStore('chart', () => {
     formattedCandles,
     formattedVolume,
     overlays,
+    mtfConfluence,
     fetchSymbols,
     fetchCandles,
     fetchOverlays,
     setTimeframe,
     setSymbol,
     ensureSymbolReady,
+    setMtfConfluence,
   }
 })

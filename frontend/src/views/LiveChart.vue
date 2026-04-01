@@ -49,15 +49,13 @@ const overlayConfig = [
 
 /**
  * Confluence — single source of truth from backend ConfluenceEngine v3.2.
- * All bottom cards and the Wave Matrix panel read from this.
+ * Reads from chartStore.overlays.confluence (populated by overlay API / WS).
+ * Falls back to mtfData.confluence (populated by WaveMatrixPanel's mtf-waves call).
+ * This ensures bias strip always has data even when overlay cache is computing.
  */
-const confluence = ref(null)
-
-function updateConfluence() {
-  const o = chartStore.overlays
-  if (!o?.confluence) return
-  confluence.value = o.confluence
-}
+const confluence = computed(() => {
+  return chartStore.overlays?.confluence || chartStore.mtfConfluence || null
+})
 
 const lastPrice = ref({ price: 0, change: 0, bull: true })
 
@@ -173,7 +171,7 @@ function updateChartData() {
     lastSetDataLength = candles.length
   }
   updatePrice()
-  updateConfluence()
+  // confluence is now a computed — auto-updates from chartStore
 }
 
 // Pause sync timer when tab is hidden to save CPU

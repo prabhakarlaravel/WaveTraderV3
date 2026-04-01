@@ -263,48 +263,21 @@ class ChartController extends Controller
                 continue;
             }
 
-            // Cache miss — fall back to live computation for this timeframe
-            $candles = Candle::where('symbol_id', $symbol->id)
-                ->where('timeframe', $tf)
-                ->orderBy('timestamp')
-                ->get()
-                ->toArray();
-
-            if (count($candles) < 50) {
-                $tfData[$tf] = [
-                    'timeframe' => $tf,
-                    'degree' => $degrees[$tf] ?? $tf,
-                    'wave' => null,
-                    'phase' => null,
-                    'trend' => 'neutral',
-                    'health' => 0,
-                    'waveLabels' => [],
-                    'fibTargets' => [],
-                ];
-                $trends[] = 'neutral';
-                continue;
-            }
-
-            $ewResult = (new ElliottWaveEngine())->run($candles, $symbol->ticker, $tf);
-            $msResult = (new MarketStructureEngine(5))->run($candles, $symbol->ticker, $tf);
-
-            $currentWave = $ewResult->metadata['current_wave'] ?? null;
-            $phase = $ewResult->metadata['phase'] ?? null;
-            $trend = $msResult->metadata['trend'] ?? 'neutral';
-            $health = $ewResult->metadata['health_score'] ?? 0;
-
-            $trends[] = $trend;
+            // Cache miss — dispatch background engine run instead of blocking.
+            // Return empty row for this TF; it will populate on next 30s cycle.
+            RunEnginesJob::dispatch($symbol->id, $tf)->onQueue('engines');
 
             $tfData[$tf] = [
                 'timeframe' => $tf,
                 'degree' => $degrees[$tf] ?? $tf,
-                'wave' => $currentWave,
-                'phase' => $phase,
-                'trend' => $trend,
-                'health' => $health,
-                'waveLabels' => $ewResult->overlays['waveLabels'] ?? [],
-                'fibTargets' => $ewResult->overlays['fibTargets'] ?? [],
+                'wave' => null,
+                'phase' => null,
+                'trend' => 'neutral',
+                'health' => 0,
+                'waveLabels' => [],
+                'fibTargets' => [],
             ];
+            $trends[] = 'neutral';
         }
 
         // Calculate alignment
