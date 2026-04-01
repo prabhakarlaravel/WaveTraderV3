@@ -293,32 +293,41 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
       <div class="chart-col">
         <div ref="chartContainer" class="chart-container"></div>
 
-        <!-- Bias strip below chart — unified with backend ConfluenceEngine v3.2 -->
+        <!-- Bias strip below chart — simplified for basic users -->
         <div class="bias-strip">
+          <!-- Market Trend card -->
           <div :class="['bias-card', htfDir === 'BULL' ? 'bull' : htfDir === 'BEAR' ? 'bear' : 'warn']">
-            <span class="bias-arrow" :style="{ transform: htfDir === 'BULL' ? 'rotate(-45deg)' : htfDir === 'BEAR' ? 'rotate(45deg)' : '' }">→</span>
+            <span class="bias-emoji">{{ confluence?.marketTrend?.emoji || '⏳' }}</span>
             <div>
-              <div class="bias-label">HTF bias (1D · 4H · 1H)</div>
+              <div class="bias-label">Market Trend</div>
               <div class="bias-value" :style="{ color: htfDir === 'BULL' ? 'var(--bull)' : htfDir === 'BEAR' ? 'var(--bear)' : 'var(--dim)' }">
-                {{ htfDir === 'BULL' ? 'BULLISH — look for LONGS' : htfDir === 'BEAR' ? 'BEARISH — look for SHORTS' : 'NEUTRAL — no bias' }}
+                {{ confluence?.marketTrend?.label || (htfDir === 'BULL' ? 'Uptrend' : htfDir === 'BEAR' ? 'Downtrend' : 'Sideways') }}
               </div>
             </div>
           </div>
-          <div :class="['bias-card', signalDir === 'BULL' ? 'bull' : signalDir === 'BEAR' ? 'bear' : 'warn']">
-            <span class="bias-arrow" :style="{ transform: signalDir === 'BULL' ? 'rotate(-45deg)' : signalDir === 'BEAR' ? 'rotate(45deg)' : '' }">→</span>
-            <div>
-              <div class="bias-label">Signal (weighted engines)</div>
-              <div class="bias-value" :style="{ color: signalDir === 'BULL' ? 'var(--bull)' : signalDir === 'BEAR' ? 'var(--bear)' : 'var(--dim)' }">
-                {{ signalDir === 'BULL' ? 'BULLISH' : signalDir === 'BEAR' ? 'BEARISH' : 'NEUTRAL' }} — {{ aligned ? '✓ aligned with HTF' : conflict ? '⚠ HTF conflict' : '↔ waiting' }}
+          <!-- Recommendation card -->
+          <div :class="['bias-card', 'bias-action',
+            confluence?.callPut === 'BUY CALL' ? 'bull' :
+            confluence?.callPut === 'BUY PUT' ? 'bear' : 'warn']"
+            style="min-width: 240px">
+            <span class="bias-emoji" style="font-size: 22px">
+              {{ confluence?.callPut === 'BUY CALL' ? '📈' : confluence?.callPut === 'BUY PUT' ? '📉' : '⏸' }}
+            </span>
+            <div style="flex: 1">
+              <div class="bias-label">Recommendation</div>
+              <div class="bias-value" :style="{
+                color: confluence?.callPut === 'BUY CALL' ? 'var(--bull)' :
+                       confluence?.callPut === 'BUY PUT' ? 'var(--bear)' : 'var(--ob)',
+                fontSize: '14px'
+              }">
+                {{ confluence?.callPut || 'ANALYZING...' }}
               </div>
             </div>
-          </div>
-          <div :class="['bias-card', confluence?.adjustedPct >= 60 ? (confluence?.direction === 'BULL' ? 'bull' : 'bear') : 'warn']" style="min-width: 180px">
-            <div>
-              <div class="bias-label">Action ({{ confluence?.adjustedPct || confluence?.pct || 0 }}%)</div>
-              <div class="bias-value" :style="{ color: confluence?.adjustedPct >= 60 ? (confluence?.direction === 'BULL' ? 'var(--bull)' : 'var(--bear)') : 'var(--ob)' }">
-                {{ confluence?.action || 'ANALYZING...' }}
-              </div>
+            <div class="bias-conf" :style="{
+              color: confluence?.callPut === 'BUY CALL' ? 'var(--bull)' :
+                     confluence?.callPut === 'BUY PUT' ? 'var(--bear)' : 'var(--dim)'
+            }">
+              {{ confluence?.adjustedPct || 0 }}%
             </div>
           </div>
         </div>
@@ -421,15 +430,17 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
 /* ── Bias strip ── */
 .bias-strip { display: flex; gap: 6px; }
 .bias-card {
-  flex: 1; padding: 8px 12px; border-radius: 8px;
-  display: flex; align-items: center; gap: 8px;
+  flex: 1; padding: 10px 14px; border-radius: 10px;
+  display: flex; align-items: center; gap: 10px;
 }
+.bias-action { flex: 1.5; }
 .bias-card.bull { background: var(--bull-fade); border: 1px solid var(--bull-line); }
 .bias-card.bear { background: var(--bear-fade); border: 1px solid var(--bear-line); }
 .bias-card.warn { background: rgba(245,158,11,0.06); border: 1px solid rgba(245,158,11,0.25); }
-.bias-arrow { font-size: 16px; color: var(--muted); display: inline-block; }
-.bias-label { font-size: 10px; color: var(--muted); }
-.bias-value { font-family: var(--mono); font-size: 12px; font-weight: 700; }
+.bias-emoji { font-size: 18px; flex-shrink: 0; }
+.bias-label { font-size: 10px; color: var(--muted); margin-bottom: 1px; }
+.bias-value { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+.bias-conf { font-family: var(--mono); font-size: 18px; font-weight: 800; flex-shrink: 0; }
 
 /* ── Wave Matrix Panel ── */
 .matrix-panel {

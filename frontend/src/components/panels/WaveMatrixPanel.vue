@@ -66,8 +66,8 @@ const confluence = computed(() => chartStore.overlays?.confluence || mtfData.val
 
 /**
  * Call/Put recommendation — 100% from backend ConfluenceEngine.
- * Frontend does NOT recalculate direction or trend independently.
- * This eliminates the 3-brain conflict from v3.1.
+ * Simplified for basic users: BUY CALL / BUY PUT / WAIT only.
+ * No HEDGE, no technical jargon. System handles complexity internally.
  */
 const callPutRec = computed(() => {
   const c = confluence.value
@@ -75,121 +75,53 @@ const callPutRec = computed(() => {
 
   const callPut = c.callPut || 'WAIT'
   const adjustedPct = c.adjustedPct ?? c.pct ?? 0
-  const direction = c.direction || 'NEUTRAL'
-  const htfBias = c.htfBias || mtfData.value?.htfBias || 'NEUTRAL'
-  const conflict = c.conflict || false
-  const gatesOk = c.gatesOk ?? true
-  const activeTf = getTfRow(chartStore.activeTimeframe)
+  const userReason = c.userReason || ''
+  const marketTrend = c.marketTrend || { label: 'Analyzing...', emoji: '⏳', direction: 'NEUTRAL' }
 
   // Time decay (Layer 6): reduce confidence if data is stale
+  // Use confluence's own computed_at (most accurate), fallback to overlay-level timestamp
   let finalPct = adjustedPct
-  const computedAt = chartStore.overlays?.computed_at
+  const computedAt = c.computed_at || chartStore.overlays?.computed_at
   if (computedAt) {
     const ageMs = Date.now() - new Date(computedAt).getTime()
-    if (ageMs > 120000) {
-      // >120s stale: show STALE
-      return {
-        rec: 'STALE', emoji: '⏳', conf: 0,
-        color: '#6b7280', borderColor: 'rgba(107,114,128,0.3)', bgClass: 'cp-wait',
-        trendLabel: '⏳ STALE DATA', trendColor: '#6b7280',
-        signalLabel: '◈ REFRESH', signalColor: '#6b7280',
-        trendDetail: 'Data older than 2 minutes',
-        signalDetail: 'Waiting for engine refresh',
-        why: 'Signal data is stale — wait for fresh computation.',
-        conflict: false, gatesOk: false,
-      }
+    // Only apply staleness during market hours (>5 min = stale)
+    // During market-closed hours, data can be hours old but still valid
+    if (ageMs > 300000) {
+      // >5 minutes: show data but with reduced confidence, not STALE
+      finalPct = Math.max(30, finalPct - 10)
+    } else if (ageMs > 120000) {
+      finalPct = Math.max(30, finalPct - 5)
     }
-    if (ageMs > 60000) finalPct = Math.max(30, finalPct - 15)      // >60s: -15%
-    else if (ageMs > 30000) finalPct = Math.max(30, finalPct - 5)   // >30s: -5%
   }
 
-  // Map callPut to display properties
-  const isBull = callPut.includes('CALL')
-  const isBear = callPut.includes('PUT')
-  const isWait = callPut === 'WAIT' || callPut === 'STALE'
-  const isHedge = callPut.includes('HEDGE')
+  // Confidence level label
+  const confLevel = finalPct >= 70 ? 'high' : finalPct >= 55 ? 'medium' : finalPct >= 40 ? 'low' : 'none'
 
-  const trendDir = htfBias === 'BULL' ? '▲ UP TREND' : htfBias === 'BEAR' ? '▼ DOWN TREND' : '↔ SIDEWAYS'
-  const trendCol = htfBias === 'BULL' ? '#10b981' : htfBias === 'BEAR' ? '#ef4444' : '#818cf8'
-  const sigDir = direction === 'BULL' ? '● BULLISH' : direction === 'BEAR' ? '● BEARISH' : '◈ MIXED'
-  const sigCol = direction === 'BULL' ? '#34d399' : direction === 'BEAR' ? '#f87171' : '#818cf8'
-
-  // Build wave context detail
-  const waveCtx = activeTf?.wave ? `Wave ${activeTf.wave}` : ''
-  const phaseCtx = activeTf?.phase || ''
-
-  if (isWait) {
-    const waitReason = !gatesOk
-      ? 'Minimum conditions not met — avoid forced trades.'
-      : conflict
-        ? 'HTF conflicts with signal — wait for alignment.'
-        : 'No clear directional edge.'
+  if (callPut === 'BUY CALL') {
     return {
-      rec: 'WAIT', emoji: '⏸', conf: finalPct,
-      color: '#818cf8', borderColor: 'rgba(99,102,241,0.3)', bgClass: 'cp-wait',
-      trendLabel: trendDir, trendColor: trendCol,
-      signalLabel: sigDir, signalColor: sigCol,
-      trendDetail: htfBias === 'NEUTRAL' ? 'No clear HTF direction' : `HTF ${htfBias.toLowerCase()} bias`,
-      signalDetail: !gatesOk ? 'Gates not met' : 'Waiting for confluence',
-      why: waitReason,
-      conflict, gatesOk,
+      rec: 'BUY CALL', emoji: '📈', conf: finalPct,
+      color: '#10b981', bgClass: 'cp-call',
+      reason: userReason || 'Bullish setup detected. Market favors CALL side.',
+      trend: marketTrend, confLevel,
     }
   }
 
-  if (isBull && !isHedge) {
+  if (callPut === 'BUY PUT') {
     return {
-      rec: callPut, emoji: '📈', conf: finalPct,
-      color: '#10b981', borderColor: 'rgba(16,185,129,0.3)', bgClass: 'cp-call',
-      trendLabel: trendDir, trendColor: trendCol,
-      signalLabel: sigDir, signalColor: sigCol,
-      trendDetail: 'HH + HL structure',
-      signalDetail: `${waveCtx} impulse · BOS confirmed`.trim(),
-      why: 'Trend & signal aligned bullish — stay on CALL side.',
-      conflict, gatesOk,
+      rec: 'BUY PUT', emoji: '📉', conf: finalPct,
+      color: '#ef4444', bgClass: 'cp-put',
+      reason: userReason || 'Bearish setup detected. Market favors PUT side.',
+      trend: marketTrend, confLevel,
     }
   }
 
-  if (isBear && !isHedge) {
-    return {
-      rec: callPut, emoji: '📉', conf: finalPct,
-      color: '#ef4444', borderColor: 'rgba(239,68,68,0.3)', bgClass: 'cp-put',
-      trendLabel: trendDir, trendColor: trendCol,
-      signalLabel: sigDir, signalColor: sigCol,
-      trendDetail: 'LL + LH structure',
-      signalDetail: `${waveCtx} declining · ${phaseCtx}`.trim(),
-      why: 'Trend & signal aligned bearish — stay on PUT side.',
-      conflict, gatesOk,
-    }
+  // WAIT
+  return {
+    rec: 'WAIT', emoji: '⏸', conf: finalPct,
+    color: '#818cf8', bgClass: 'cp-wait',
+    reason: userReason || 'No clear trade setup. Stay on the sideline.',
+    trend: marketTrend, confLevel,
   }
-
-  // Hedge scenarios (conflict between HTF and signal)
-  if (isHedge && isBull) {
-    return {
-      rec: callPut, emoji: '⚡', conf: finalPct,
-      color: '#f59e0b', borderColor: 'rgba(245,158,11,0.3)', bgClass: 'cp-caution',
-      trendLabel: trendDir, trendColor: trendCol,
-      signalLabel: sigDir, signalColor: sigCol,
-      trendDetail: `HTF ${htfBias.toLowerCase()} but signal bullish`,
-      signalDetail: 'Counter-trend bounce detected',
-      why: 'HTF conflict — reduced conviction hedge only.',
-      conflict: true, gatesOk,
-    }
-  }
-
-  if (isHedge && isBear) {
-    return {
-      rec: callPut, emoji: '⚡', conf: finalPct,
-      color: '#f59e0b', borderColor: 'rgba(245,158,11,0.3)', bgClass: 'cp-caution',
-      trendLabel: trendDir, trendColor: trendCol,
-      signalLabel: sigDir, signalColor: sigCol,
-      trendDetail: `HTF ${htfBias.toLowerCase()} but signal bearish`,
-      signalDetail: 'Counter-trend pullback detected',
-      why: 'HTF conflict — reduced conviction hedge only.',
-      conflict: true, gatesOk,
-    }
-  }
-
-  return null
 })
 
 function toggleTf(tf) {
@@ -309,43 +241,32 @@ function formatPrice(p) {
     <div v-if="loading && !mtfData" class="loading">Loading wave analysis...</div>
 
     <template v-if="mtfData">
-      <!-- Call / Put Recommendation block — 100% from backend -->
-      <div v-if="callPutRec" class="cp-block" :class="callPutRec.bgClass" :style="{ borderColor: callPutRec.borderColor }">
-        <!-- Top row: emoji + recommendation + confidence -->
+      <!-- Call / Put Recommendation — Simple for basic users -->
+      <div v-if="callPutRec" class="cp-block" :class="callPutRec.bgClass">
+        <!-- Big recommendation + confidence -->
         <div class="cp-top">
           <span class="cp-emoji">{{ callPutRec.emoji }}</span>
           <div class="cp-main">
-            <div class="cp-label">Recommendation</div>
             <div class="cp-rec" :style="{ color: callPutRec.color }">{{ callPutRec.rec }}</div>
           </div>
           <div class="cp-conf-wrap">
-            <div class="cp-conf-label">Confidence</div>
             <div class="cp-conf" :style="{ color: callPutRec.color }">{{ callPutRec.conf }}%</div>
+            <div class="cp-conf-level" :class="'level-' + callPutRec.confLevel">
+              {{ callPutRec.confLevel === 'high' ? 'Strong' : callPutRec.confLevel === 'medium' ? 'Moderate' : callPutRec.confLevel === 'low' ? 'Weak' : '' }}
+            </div>
           </div>
         </div>
-        <!-- Conflict warning banner -->
-        <div v-if="callPutRec.conflict" class="cp-conflict">
-          ⚠ HTF conflict — {{ confluence?.conflictNote || 'trend and signal disagree' }}
+        <!-- Confidence bar -->
+        <div class="cp-bar-track">
+          <div class="cp-bar-fill" :style="{ width: callPutRec.conf + '%', background: callPutRec.color }"></div>
         </div>
-        <!-- Gates warning -->
-        <div v-if="!callPutRec.gatesOk && callPutRec.rec !== 'STALE'" class="cp-gates-warn">
-          ◈ Minimum conditions not met ({{ confluence?.gatesPassed || 0 }}/5 gates passed)
+        <!-- Market trend pill -->
+        <div class="cp-trend-row">
+          <span class="cp-trend-emoji">{{ callPutRec.trend.emoji }}</span>
+          <span class="cp-trend-label">Market: {{ callPutRec.trend.label }}</span>
         </div>
-        <!-- Bottom row: trend cell + signal cell -->
-        <div class="cp-cells">
-          <div class="cp-cell">
-            <div class="cp-cell-label">HTF Trend</div>
-            <div class="cp-cell-val" :style="{ color: callPutRec.trendColor }">{{ callPutRec.trendLabel }}</div>
-            <div class="cp-cell-detail">{{ callPutRec.trendDetail }}</div>
-          </div>
-          <div class="cp-cell cp-cell-right">
-            <div class="cp-cell-label">Signal</div>
-            <div class="cp-cell-val" :style="{ color: callPutRec.signalColor }">{{ callPutRec.signalLabel }}</div>
-            <div class="cp-cell-detail">{{ callPutRec.signalDetail }}</div>
-          </div>
-        </div>
-        <!-- Reason -->
-        <div class="cp-why">{{ callPutRec.why }}</div>
+        <!-- Plain English reason -->
+        <div class="cp-reason">{{ callPutRec.reason }}</div>
       </div>
 
       <!-- Trend Progress — now dynamic from backend -->
@@ -449,20 +370,22 @@ function formatPrice(p) {
         </template>
       </div>
 
-      <!-- Bottom cards: HTF Bias + Alignment + Health — unified with backend data -->
+      <!-- Bottom cards: Market Trend + Signal Strength + Health — simple labels -->
       <div v-if="confluence" class="sltp-strip">
         <div class="sltp-card">
-          <div class="sltp-label" style="color: var(--dim)">HTF Bias</div>
+          <div class="sltp-label" style="color: var(--dim)">Market</div>
           <div class="sltp-price" :style="{ color: mtfData.htfBias === 'BULL' ? '#34d399' : mtfData.htfBias === 'BEAR' ? '#ef5350' : '#888' }">
-            {{ mtfData.htfBias }}
+            {{ mtfData.htfBias === 'BULL' ? '↑ UP' : mtfData.htfBias === 'BEAR' ? '↓ DOWN' : '↔ FLAT' }}
           </div>
         </div>
         <div class="sltp-card">
-          <div class="sltp-label" style="color: var(--dim)">Alignment</div>
-          <div class="sltp-price" style="color: #a78bfa">{{ mtfData.alignment }}</div>
+          <div class="sltp-label" style="color: var(--dim)">Strength</div>
+          <div class="sltp-price" :style="{ color: (confluence.adjustedPct || 0) >= 60 ? '#34d399' : (confluence.adjustedPct || 0) >= 45 ? '#fbbf24' : '#ef5350' }">
+            {{ (confluence.adjustedPct || 0) >= 60 ? 'STRONG' : (confluence.adjustedPct || 0) >= 45 ? 'MODERATE' : 'WEAK' }}
+          </div>
         </div>
         <div class="sltp-card">
-          <div class="sltp-label" style="color: var(--dim)">Health</div>
+          <div class="sltp-label" style="color: var(--dim)">Reliability</div>
           <div class="sltp-price" :style="{ color: healthColor(getTfRow(chartStore.activeTimeframe)?.health || 0) }">
             {{ getTfRow(chartStore.activeTimeframe)?.health || 0 }}%
           </div>
@@ -479,43 +402,39 @@ function formatPrice(p) {
 @keyframes live-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 .loading { text-align: center; padding: 20px; font-size: 11px; color: var(--dim); }
 
-/* Call/Put recommendation block */
-.cp-block { border-radius: 8px; margin-bottom: 10px; overflow: hidden; border: 1px solid; }
-.cp-call   { background: linear-gradient(160deg, #071a0f 0%, #0a1d12 100%); }
-.cp-put    { background: linear-gradient(160deg, #1a0707 0%, #1c0a0a 100%); }
-.cp-caution{ background: linear-gradient(160deg, #191000 0%, #1a1100 100%); }
-.cp-wait   { background: linear-gradient(160deg, #0f0d1a 0%, #100f1c 100%); }
+/* Call/Put recommendation block — simplified */
+.cp-block { border-radius: 10px; margin-bottom: 10px; overflow: hidden; border: 1px solid rgba(255,255,255,0.06); }
+.cp-call   { background: linear-gradient(160deg, #071a0f 0%, #0a1d12 100%); border-color: rgba(16,185,129,0.25); }
+.cp-put    { background: linear-gradient(160deg, #1a0707 0%, #1c0a0a 100%); border-color: rgba(239,68,68,0.25); }
+.cp-wait   { background: linear-gradient(160deg, #0f0d1a 0%, #100f1c 100%); border-color: rgba(99,102,241,0.2); }
 
-.cp-top { display: flex; align-items: center; gap: 8px; padding: 9px 11px; }
-.cp-emoji { font-size: 24px; line-height: 1; flex-shrink: 0; }
+.cp-top { display: flex; align-items: center; gap: 10px; padding: 12px 14px 6px; }
+.cp-emoji { font-size: 28px; line-height: 1; flex-shrink: 0; }
 .cp-main { flex: 1; }
-.cp-label { font-size: 8px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #4b5563; margin-bottom: 1px; }
-.cp-rec   { font-size: 20px; font-weight: 900; line-height: 1; letter-spacing: 0.5px; }
+.cp-rec   { font-size: 22px; font-weight: 900; line-height: 1; letter-spacing: 0.5px; }
 .cp-conf-wrap { text-align: right; flex-shrink: 0; }
-.cp-conf-label { font-size: 8px; color: #4b5563; margin-bottom: 1px; }
-.cp-conf  { font-size: 17px; font-weight: 800; }
+.cp-conf  { font-size: 20px; font-weight: 800; line-height: 1; }
+.cp-conf-level { font-size: 9px; font-weight: 700; text-transform: uppercase; margin-top: 2px; letter-spacing: 0.5px; }
+.level-high   { color: #10b981; }
+.level-medium { color: #f59e0b; }
+.level-low    { color: #ef4444; }
+.level-none   { color: #6b7280; }
 
-/* Conflict + gates warning banners */
-.cp-conflict {
-  padding: 4px 11px; font-size: 9px; font-weight: 600; color: #f59e0b;
-  background: rgba(245,158,11,0.08); border-top: 1px solid rgba(245,158,11,0.15);
+/* Confidence bar */
+.cp-bar-track { height: 4px; background: rgba(255,255,255,0.06); margin: 0 14px 8px; border-radius: 2px; }
+.cp-bar-fill  { height: 100%; border-radius: 2px; transition: width 0.5s ease; }
+
+/* Market trend row */
+.cp-trend-row {
+  display: flex; align-items: center; gap: 6px; padding: 4px 14px;
+  font-size: 11px; color: #9ca3af;
 }
-.cp-gates-warn {
-  padding: 4px 11px; font-size: 9px; font-weight: 600; color: #818cf8;
-  background: rgba(99,102,241,0.06); border-top: 1px solid rgba(99,102,241,0.12);
-}
+.cp-trend-emoji { font-size: 14px; }
+.cp-trend-label { font-weight: 600; }
 
-.cp-cells { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid rgba(255,255,255,0.04); }
-.cp-cell  { padding: 5px 10px; }
-.cp-cell-right { border-left: 1px solid rgba(255,255,255,0.04); }
-.cp-cell-label  { font-size: 8px; color: #374151; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; }
-.cp-cell-val    { font-size: 11px; font-weight: 700; line-height: 1; }
-.cp-cell-detail { font-size: 8px; color: #374151; margin-top: 2px; }
-
-/* Why explanation */
-.cp-why {
-  padding: 4px 11px 6px; font-size: 8px; color: #4b5563;
-  border-top: 1px solid rgba(255,255,255,0.03); font-style: italic;
+/* Plain English reason */
+.cp-reason {
+  padding: 6px 14px 10px; font-size: 11px; color: #6b7280; line-height: 1.4;
 }
 
 /* Trend gauge */

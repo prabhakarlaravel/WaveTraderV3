@@ -21,7 +21,9 @@ namespace App\Engines;
  *   Trigger (BOS/CHOCH + pattern):      max 30 points
  *
  * New outputs:
- *   - callPut: 'BUY CALL' | 'BUY PUT' | 'HEDGE CALL' | 'HEDGE PUT' | 'WAIT'
+ *   - callPut: 'BUY CALL' | 'BUY PUT' | 'WAIT' (simplified for basic users)
+ *   - userReason: plain-English explanation of why this recommendation
+ *   - marketTrend: simplified trend summary {label, emoji, direction}
  *   - adjustedPct: final confidence after all adjustments (30-85 cap)
  *   - conflict: bool — true when HTF trend opposes signal direction
  *   - conflictNote: string explaining the conflict
@@ -215,6 +217,8 @@ class ConfluenceEngine
         // ── Phase 6: Call/Put + Action determination ──
         $callPut = $this->determineCallPut($direction, $htfBias, $adjustedPct, $gatesOk, $conflict);
         $action = $this->determineAction($total, $direction, $contextScore, $levelsScore, $triggerScore, $gatesOk, $conflict, $htfBias);
+        $userReason = $this->buildUserReason($callPut, $direction, $htfBias, $adjustedPct, $gatesOk, $conflict, $agreeingEngines, $currentWave);
+        $marketTrend = $this->buildMarketTrend($htfBias, $direction, $conflict);
 
         return [
             'total_score' => $total,
@@ -224,6 +228,9 @@ class ConfluenceEngine
             'direction' => $direction,
             'callPut' => $callPut,
             'action' => $action,
+            'userReason' => $userReason,
+            'marketTrend' => $marketTrend,
+            'computed_at' => now()->toIso8601String(),
             'conflict' => $conflict,
             'conflictNote' => $conflictNote,
             'htfBias' => $htfBias,
@@ -263,8 +270,9 @@ class ConfluenceEngine
     }
 
     /**
-     * Determine BUY CALL / BUY PUT / HEDGE / WAIT recommendation.
-     * This is the SINGLE source of truth — frontend must NOT recalculate.
+     * Determine BUY CALL / BUY PUT / WAIT recommendation.
+     * Simplified for basic options traders — no HEDGE, no complex states.
+     * System handles trend conflict internally; user sees only the final answer.
      */
     private function determineCallPut(
         string $direction,
@@ -278,30 +286,29 @@ class ConfluenceEngine
             return 'WAIT';
         }
 
-        // Below 30% confidence: WAIT
-        if ($adjustedPct < 35) {
+        // Below 40% confidence: WAIT (too uncertain for any trade)
+        if ($adjustedPct < 40) {
             return 'WAIT';
         }
 
-        // Conflict scenarios: recommend HEDGE (reduced conviction)
+        // Conflict scenarios: signal opposes HTF trend
         if ($conflict) {
-            // HTF BULL but signal BEAR → small pullback in uptrend
-            if ($htfBias === 'BULL' && $direction === 'BEAR') {
-                return $adjustedPct >= 55 ? 'HEDGE PUT' : 'WAIT';
+            // Only allow counter-trend trade if very strong signal (≥65%)
+            // Otherwise WAIT — don't confuse basic users with hedge concepts
+            if ($adjustedPct < 65) {
+                return 'WAIT';
             }
-            // HTF BEAR but signal BULL → bounce in downtrend
-            if ($htfBias === 'BEAR' && $direction === 'BULL') {
-                return $adjustedPct >= 55 ? 'HEDGE CALL' : 'WAIT';
-            }
+            // Strong counter-trend signal: follow the signal direction
+            return $direction === 'BULL' ? 'BUY CALL' : 'BUY PUT';
         }
 
-        // Aligned scenarios: full conviction
-        if ($direction === 'BULL') {
-            return $adjustedPct >= 60 ? 'BUY CALL' : ($adjustedPct >= 45 ? 'HEDGE CALL' : 'WAIT');
+        // Aligned or neutral HTF: follow signal direction
+        if ($direction === 'BULL' && $adjustedPct >= 50) {
+            return 'BUY CALL';
         }
 
-        if ($direction === 'BEAR') {
-            return $adjustedPct >= 60 ? 'BUY PUT' : ($adjustedPct >= 45 ? 'HEDGE PUT' : 'WAIT');
+        if ($direction === 'BEAR' && $adjustedPct >= 50) {
+            return 'BUY PUT';
         }
 
         return 'WAIT';
@@ -357,6 +364,86 @@ class ConfluenceEngine
         }
 
         return 'NO TRADE';
+    }
+
+    /**
+     * Build a plain-English reason for basic users.
+     * No jargon — just clear direction rationale.
+     */
+    private function buildUserReason(
+        string $callPut,
+        string $direction,
+        string $htfBias,
+        int $adjustedPct,
+        bool $gatesOk,
+        bool $conflict,
+        int $agreeingEngines,
+        ?string $currentWave,
+    ): string {
+        if ($callPut === 'WAIT') {
+            if (! $gatesOk) {
+                return 'Not enough signals to take a trade right now. Wait for a clearer setup.';
+            }
+            if ($conflict && $adjustedPct < 65) {
+                return 'Market trend and short-term signals disagree. Stay on the sideline until they align.';
+            }
+            if ($adjustedPct < 40) {
+                return 'Signals are too weak. No clear direction to trade.';
+            }
+            if ($direction === 'NEUTRAL') {
+                return 'Market is sideways. Wait for a breakout in either direction.';
+            }
+
+            return 'Conditions are not strong enough for a confident trade.';
+        }
+
+        $strength = $adjustedPct >= 70 ? 'Strong' : ($adjustedPct >= 55 ? 'Moderate' : 'Early');
+        $engineNote = $agreeingEngines >= 4 ? 'Multiple indicators agree.' : ($agreeingEngines >= 2 ? 'Key indicators align.' : '');
+
+        if ($callPut === 'BUY CALL') {
+            $trendNote = $htfBias === 'BULL'
+                ? 'Market trend is UP.'
+                : ($conflict ? 'Short-term bounce detected against the trend.' : 'Upward momentum building.');
+            $waveNote = in_array($currentWave, ['1', '3'], true) ? ' Strong wave phase.' : '';
+
+            return "{$strength} bullish signal. {$trendNote}{$waveNote} {$engineNote}";
+        }
+
+        if ($callPut === 'BUY PUT') {
+            $trendNote = $htfBias === 'BEAR'
+                ? 'Market trend is DOWN.'
+                : ($conflict ? 'Short-term dip detected against the trend.' : 'Downward pressure building.');
+            $waveNote = in_array($currentWave, ['3', 'C'], true) ? ' Strong wave phase.' : '';
+
+            return "{$strength} bearish signal. {$trendNote}{$waveNote} {$engineNote}";
+        }
+
+        return 'Analyzing market conditions...';
+    }
+
+    /**
+     * Build simplified market trend summary for basic users.
+     * Returns: label, direction, strength
+     */
+    private function buildMarketTrend(string $htfBias, string $direction, bool $conflict): array
+    {
+        if ($htfBias === 'BULL') {
+            $label = $conflict ? 'Uptrend (pullback)' : 'Uptrend';
+            $emoji = '📈';
+        } elseif ($htfBias === 'BEAR') {
+            $label = $conflict ? 'Downtrend (bounce)' : 'Downtrend';
+            $emoji = '📉';
+        } else {
+            $label = 'Sideways';
+            $emoji = '↔️';
+        }
+
+        return [
+            'label' => $label,
+            'emoji' => $emoji,
+            'direction' => $htfBias,
+            'conflict' => $conflict,
+        ];
     }
 
     /**
