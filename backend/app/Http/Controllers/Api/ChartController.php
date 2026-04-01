@@ -152,7 +152,7 @@ class ChartController extends Controller
 
         $emptyOverlay = [
             'signals' => [], 'orderBlocks' => [], 'fvgs' => [], 'swings' => [],
-            'waveLabels' => [], 'subLegs' => [], 'bos' => [], 'vwap' => [],
+            'waveLabels' => [], 'subLegs' => [], 'formingWave' => null, 'bos' => [], 'vwap' => [],
             'patterns' => [], 'fibTargets' => [], 'nextTargets' => [],
             'timeEstimate' => [], 'liquidityPools' => [], 'oteZones' => [],
             'premiumDiscount' => [], 'inducements' => [], 'confluence' => null,

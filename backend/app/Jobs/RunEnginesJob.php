@@ -150,6 +150,7 @@ class RunEnginesJob implements ShouldQueue, ShouldBeUnique
             'swings' => $ms?->overlays['swings'] ?? [],
             'waveLabels' => $ew?->overlays['waveLabels'] ?? [],
             'subLegs' => $ew?->overlays['subLegs'] ?? [],
+            'formingWave' => $ew?->overlays['formingWave'] ?? null,
             'bos' => $ms?->overlays['bos'] ?? [],
             'vwap' => $vwap?->overlays['vwap'] ?? [],
             'patterns' => $pa?->overlays['patterns'] ?? [],

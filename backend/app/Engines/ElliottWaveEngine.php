@@ -69,6 +69,9 @@ class ElliottWaveEngine implements EngineInterface
         // Step 9: Detect sub-legs within each main wave segment
         $subLegs = $this->detectSubLegs($waveCounts, $candles, $degree);
 
+        // Step 10: Detect forming wave at the live edge
+        $formingWave = $this->detectFormingWave($waveCounts, $candles);
+
         return new EngineResult(
             engine: 'elliott_wave',
             symbol: $symbol,
@@ -77,6 +80,7 @@ class ElliottWaveEngine implements EngineInterface
             overlays: [
                 'waveLabels' => $waveLabels,
                 'subLegs' => $subLegs,
+                'formingWave' => $formingWave,
                 'fibTargets' => $fibTargets,
                 'nextTargets' => $nextTargets,
                 'timeEstimate' => $timeEstimate,
@@ -658,6 +662,24 @@ class ElliottWaveEngine implements EngineInterface
                     $targets[] = ['label' => 'C = 1.618 × A', 'price' => round($bEnd + $aLen * 1.618 * (-$dir), 2), 'fib' => 1.618, 'type' => 'extended', 'color' => '#f59e0b'];
                 }
                 break;
+
+            case 'C':
+                // After C: expect new impulse wave 1
+                $nextWave = '1';
+                $cEnd = end($waves)['price'];
+                // ABC correction range: from wave 5 to wave C
+                if (isset($byLabel['5'])) {
+                    $w5End = $byLabel['5']['price'];
+                    $corrLen = abs($cEnd - $w5End);
+                    $newDir = $cEnd < $w5End ? 1 : -1; // New impulse reverses correction direction
+
+                    $targets[] = ['label' => 'W1 retrace (0.382)', 'price' => round($cEnd + $corrLen * 0.382 * $newDir, 2), 'fib' => 0.382, 'type' => 'secondary', 'color' => '#8b5cf6'];
+                    $targets[] = ['label' => 'W1 retrace (0.5)', 'price' => round($cEnd + $corrLen * 0.5 * $newDir, 2), 'fib' => 0.5, 'type' => 'primary', 'color' => '#34d399'];
+                    $targets[] = ['label' => 'W1 retrace (0.618)', 'price' => round($cEnd + $corrLen * 0.618 * $newDir, 2), 'fib' => 0.618, 'type' => 'extended', 'color' => '#f59e0b'];
+
+                    $invalidation = ['price' => round($cEnd, 2), 'rule' => 'New W1 must not break below Wave C'];
+                }
+                break;
         }
 
         // Add retracement lines for context (between last two waves)
@@ -831,6 +853,73 @@ class ElliottWaveEngine implements EngineInterface
                 'progressPct' => $progressPct,
                 'formula' => $formula,
             ] : null,
+        ];
+    }
+
+    /**
+     * Detect a forming wave at the live edge beyond the last confirmed wave.
+     * Scans remaining candles with lower-strength pivots to find tentative structure.
+     */
+    private function detectFormingWave(array $waveCounts, array $candles): ?array
+    {
+        if (empty($waveCounts) || empty($candles)) {
+            return null;
+        }
+
+        $lastWave = end($waveCounts);
+        $lastLabel = $lastWave['label'];
+        $lastIndex = $lastWave['index'];
+
+        // Determine next expected wave label
+        // Only emit forming wave after sequence-ending waves (C or 5)
+        $nextLabel = null;
+        if ($lastLabel === 'C') {
+            $nextLabel = '1'; // New impulse after correction
+        } elseif ($lastLabel === '5') {
+            $nextLabel = 'A'; // New correction after impulse
+        } else {
+            // Mid-sequence waves are already handled by the engine
+            return null;
+        }
+
+        // Need at least 6 candles after the last confirmed wave
+        $remainingStart = $lastIndex + 1;
+        if ($remainingStart >= count($candles) || (count($candles) - $remainingStart) < 6) {
+            return null;
+        }
+
+        // Extract the remaining candle segment
+        $segment = array_slice($candles, $remainingStart);
+
+        // Detect lower-strength pivots in the remaining segment
+        $pivots = $this->detectPivots($segment, 3);
+
+        if (empty($pivots)) {
+            return null;
+        }
+
+        // Build swing sequence from tentative pivots
+        $swings = $this->buildSwingSequence($pivots);
+
+        // Build tentative pivot data with absolute indices/timestamps
+        $tentativePivots = array_map(function ($swing) {
+            return [
+                'price' => $swing['price'],
+                'timestamp' => $swing['timestamp'],
+                'type' => $swing['type'],
+            ];
+        }, $swings);
+
+        $lastCandle = end($candles);
+
+        return [
+            'nextLabel' => $nextLabel,
+            'tentative' => true,
+            'startPrice' => $lastWave['price'],
+            'startTime' => $lastWave['timestamp'],
+            'currentPrice' => (float) $lastCandle['close'],
+            'currentTime' => $lastCandle['timestamp'],
+            'tentativePivots' => $tentativePivots,
         ];
     }
 

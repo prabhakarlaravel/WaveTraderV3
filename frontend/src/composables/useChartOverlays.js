@@ -98,6 +98,9 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     if (toggles.legs) renderSubLegs(overlays.subLegs || [], svg)
     if (toggles.waves) renderWaveLabels(overlays.waveLabels || [], svg, false)
 
+    // Live edge: connect last confirmed wave to current price + forming wave tentative pivots
+    if (toggles.waves) renderFormingWave(overlays.formingWave || null, overlays.waveLabels || [], svg)
+
     // Projectile replaces the simpler wave targets + time estimate when enabled
     if (toggles.projectile) {
       try { getProjectileRenderer().render(svg, w, h, overlays) } catch (e) { /* projectile render error */ }
@@ -409,6 +412,141 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
         svg.appendChild(pulse)
       }
     }
+  }
+
+  // ── Forming Wave: live edge from last confirmed wave to current price ──
+  function renderFormingWave(formingWave, waveLabels, svg) {
+    if (!formingWave || !formingWave.tentative) return
+    if (!waveLabels || waveLabels.length === 0) return
+
+    const lastLabel = waveLabels[waveLabels.length - 1]
+    const startX = getX(toUnix(lastLabel.timestamp))
+    const startY = getY(lastLabel.price)
+    if (startX === null || startY === null) return
+
+    // Current price point (end of forming wave)
+    const endX = getX(toUnix(formingWave.currentTime))
+    const endY = getY(formingWave.currentPrice)
+    if (endX === null || endY === null) return
+
+    // Gap must be meaningful (at least 10px)
+    if (Math.abs(endX - startX) < 10) return
+
+    // ── Dashed green line from last confirmed wave to current price ──
+    const edgeLine = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+    edgeLine.setAttribute('x1', startX)
+    edgeLine.setAttribute('y1', startY)
+    edgeLine.setAttribute('x2', endX)
+    edgeLine.setAttribute('y2', endY)
+    edgeLine.setAttribute('stroke', '#34d399')
+    edgeLine.setAttribute('stroke-width', '2')
+    edgeLine.setAttribute('stroke-dasharray', '8 6')
+    edgeLine.setAttribute('opacity', '0.6')
+    edgeLine.setAttribute('stroke-linecap', 'round')
+    // Pulse animation
+    const anim = document.createElementNS('http://www.w3.org/2000/svg', 'animate')
+    anim.setAttribute('attributeName', 'opacity')
+    anim.setAttribute('values', '0.3;0.7;0.3')
+    anim.setAttribute('dur', '2.5s')
+    anim.setAttribute('repeatCount', 'indefinite')
+    edgeLine.appendChild(anim)
+    svg.appendChild(edgeLine)
+
+    // ── Tentative pivots (faint cyan dots + thin connecting lines) ──
+    const tentPivots = formingWave.tentativePivots || []
+    if (tentPivots.length > 0) {
+      // Build all points: start → tentative pivots → current
+      const allPoints = [{ x: startX, y: startY }]
+
+      for (const tp of tentPivots) {
+        const px = getX(toUnix(tp.timestamp))
+        const py = getY(tp.price)
+        if (px !== null && py !== null) {
+          allPoints.push({ x: px, y: py, label: tp.type === 'high' ? 'H' : 'L', price: tp.price })
+        }
+      }
+      allPoints.push({ x: endX, y: endY })
+
+      // Draw thin dotted connecting lines between tentative points
+      for (let i = 0; i < allPoints.length - 1; i++) {
+        const p1 = allPoints[i]
+        const p2 = allPoints[i + 1]
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+        line.setAttribute('x1', p1.x)
+        line.setAttribute('y1', p1.y)
+        line.setAttribute('x2', p2.x)
+        line.setAttribute('y2', p2.y)
+        line.setAttribute('stroke', '#22d3ee')
+        line.setAttribute('stroke-width', '1.2')
+        line.setAttribute('stroke-dasharray', '4 4')
+        line.setAttribute('opacity', '0.4')
+        svg.appendChild(line)
+      }
+
+      // Draw small circle markers at each tentative pivot
+      for (let i = 1; i < allPoints.length - 1; i++) {
+        const p = allPoints[i]
+        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+        dot.setAttribute('cx', p.x)
+        dot.setAttribute('cy', p.y)
+        dot.setAttribute('r', '3')
+        dot.setAttribute('fill', '#22d3ee')
+        dot.setAttribute('opacity', '0.5')
+        svg.appendChild(dot)
+      }
+    }
+
+    // ── Tentative label at current price: "1?" or "A?" ──
+    const nextLabel = formingWave.nextLabel || '?'
+    const labelY = endY < startY ? endY - 22 : endY + 22 // Above if price went up, below if down
+
+    // Small stem line
+    const stem = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+    stem.setAttribute('x1', endX)
+    stem.setAttribute('y1', endY)
+    stem.setAttribute('x2', endX)
+    stem.setAttribute('y2', endY < startY ? labelY + 9 : labelY - 9)
+    stem.setAttribute('stroke', '#34d399')
+    stem.setAttribute('stroke-width', '0.7')
+    stem.setAttribute('opacity', '0.4')
+    svg.appendChild(stem)
+
+    // Circle with "?" label
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+    circle.setAttribute('cx', endX)
+    circle.setAttribute('cy', labelY)
+    circle.setAttribute('r', '11')
+    circle.setAttribute('fill', '#0c1221')
+    circle.setAttribute('stroke', '#34d399')
+    circle.setAttribute('stroke-width', '1.5')
+    circle.setAttribute('stroke-dasharray', '3 2') // Dashed border = tentative
+    svg.appendChild(circle)
+
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+    text.setAttribute('x', endX)
+    text.setAttribute('y', labelY + 4.5)
+    text.setAttribute('text-anchor', 'middle')
+    text.setAttribute('fill', '#34d399')
+    text.setAttribute('font-size', '10')
+    text.setAttribute('font-weight', '700')
+    text.setAttribute('font-family', "'JetBrains Mono', monospace")
+    text.textContent = nextLabel + '?'
+    svg.appendChild(text)
+
+    // Pulsing dot at current price
+    const pulse = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+    pulse.setAttribute('cx', endX)
+    pulse.setAttribute('cy', endY)
+    pulse.setAttribute('r', '4')
+    pulse.setAttribute('fill', '#34d399')
+    pulse.setAttribute('opacity', '0.3')
+    const pulseAnim = document.createElementNS('http://www.w3.org/2000/svg', 'animate')
+    pulseAnim.setAttribute('attributeName', 'r')
+    pulseAnim.setAttribute('values', '4;10;4')
+    pulseAnim.setAttribute('dur', '2s')
+    pulseAnim.setAttribute('repeatCount', 'indefinite')
+    pulse.appendChild(pulseAnim)
+    svg.appendChild(pulse)
   }
 
   // ── Sub-Legs (lower degree pivots within each main wave) ──
