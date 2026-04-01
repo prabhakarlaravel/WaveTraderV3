@@ -33,18 +33,6 @@ const syncAgoText = computed(() => {
   return `${min}m ${sec % 60}s ago`
 })
 
-// Live clock — updates every second using the existing nowTick ref
-const liveClock = computed(() => {
-  const _tick = nowTick.value // reactive dependency
-  const now = new Date()
-  // Convert to IST (UTC+5:30)
-  const ist = new Date(now.getTime() + (5.5 * 60 * 60 * 1000) + (now.getTimezoneOffset() * 60 * 1000))
-  const h = String(ist.getHours()).padStart(2, '0')
-  const m = String(ist.getMinutes()).padStart(2, '0')
-  const s = String(ist.getSeconds()).padStart(2, '0')
-  return `${h}:${m}:${s}`
-})
-
 const timeframes = ['1M', '5M', '15M', '1H', '4H', '1D']
 const showMatrix = ref(true)
 const overlayToggles = ref({ waves: true, legs: true, ob: true, fvg: false, bos: false, vwap: false, signals: true, projectile: true })
@@ -291,14 +279,6 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
 
       <div class="toolbar-spacer"></div>
 
-      <!-- Live Clock (IST) — left of price -->
-      <div class="live-clock">
-        <span class="clock-time">{{ liveClock }}</span>
-        <span class="clock-zone">IST</span>
-      </div>
-
-      <div class="toolbar-sep"></div>
-
       <!-- Price display -->
       <div class="price-display">
         <span class="price-value" :style="{ color: lastPrice.bull ? 'var(--bull)' : 'var(--bear)' }">
@@ -425,17 +405,6 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
 .tf-btn.active { background: var(--border-hi); color: var(--text); }
 .toolbar-sep { width: 1px; height: 18px; background: var(--border); }
 .toolbar-spacer { flex: 1; }
-
-.live-clock {
-  display: flex; align-items: baseline; gap: 4px; padding: 0 6px;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-}
-.clock-time {
-  font-size: 15px; font-weight: 700; color: #e2e8f0; letter-spacing: 1px;
-}
-.clock-zone {
-  font-size: 8px; font-weight: 600; color: #64748b; letter-spacing: 0.5px;
-}
 
 .overlay-btn {
   display: flex; align-items: center; gap: 4px;

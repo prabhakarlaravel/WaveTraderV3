@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>WaveTrader Chart Reading Guide</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0a0e1a; color: #e2e8f0; font-family: 'Segoe UI', sans-serif;
+    padding: 20px; overflow-x: hidden;
+  }
+  h1 { text-align: center; font-size: 28px; margin-bottom: 8px; color: #fff; }
+  .subtitle { text-align: center; color: #64748b; font-size: 14px; margin-bottom: 30px; }
+
+  /* Main chart container */
+  .chart-wrapper {
+    max-width: 900px; margin: 0 auto 40px;
+    background: #0f1629; border: 1px solid #1e3060; border-radius: 12px;
+    padding: 30px; position: relative;
+  }
+  .chart-svg { width: 100%; height: auto; }
+
+  /* Section cards */
+  .sections { max-width: 900px; margin: 0 auto; }
+  .section {
+    background: #0f1629; border: 1px solid #1e3060; border-radius: 12px;
+    padding: 24px; margin-bottom: 20px;
+  }
+  .section h2 {
+    font-size: 20px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px;
+  }
+  .section h2 .badge {
+    display: inline-block; width: 32px; height: 32px; border-radius: 50%;
+    text-align: center; line-height: 32px; font-size: 14px; font-weight: 700;
+  }
+  .section p { color: #94a3b8; line-height: 1.7; font-size: 15px; margin-bottom: 12px; }
+  .section .highlight { color: #e2e8f0; font-weight: 600; }
+
+  /* Mini diagrams */
+  .mini-diagram {
+    background: #0a0e1a; border: 1px solid #1e3060; border-radius: 8px;
+    padding: 20px; margin: 16px 0; text-align: center;
+  }
+  .mini-diagram svg { max-width: 100%; }
+
+  .legend-row {
+    display: flex; align-items: center; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid #162040; font-size: 14px;
+  }
+  .legend-row:last-child { border-bottom: none; }
+  .legend-dot {
+    width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
+  }
+  .legend-line {
+    width: 40px; height: 3px; border-radius: 2px; flex-shrink: 0;
+  }
+  .legend-label { color: #e2e8f0; font-weight: 600; min-width: 140px; }
+  .legend-desc { color: #94a3b8; }
+
+  .tip-box {
+    background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 8px; padding: 16px; margin-top: 16px;
+  }
+  .tip-box .tip-title { color: #60a5fa; font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+  .tip-box p { color: #93c5fd; font-size: 13px; margin: 0; }
+
+  .step-flow {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    justify-content: center; margin: 16px 0;
+  }
+  .step-box {
+    padding: 10px 16px; border-radius: 8px; font-size: 13px;
+    font-weight: 700; text-align: center; min-width: 70px;
+  }
+  .step-arrow { color: #4a5978; font-size: 20px; }
+
+  .trade-card {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px;
+  }
+  .trade-item {
+    background: #0a0e1a; border-radius: 8px; padding: 14px;
+    border: 1px solid #1e3060;
+  }
+  .trade-item .label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+  .trade-item .value { font-size: 18px; font-weight: 700; }
+
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .pulse { animation: pulse 2s infinite; }
+</style>
+</head>
+<body>
+
+<h1>WaveTrader Chart — Visual Reading Guide</h1>
+<p class="subtitle">NIFTY BANK · Understanding every element on your chart</p>
+
+<!-- ============================================================ -->
+<!-- MAIN ANNOTATED CHART DIAGRAM -->
+<!-- ============================================================ -->
+<div class="chart-wrapper">
+  <svg class="chart-svg" viewBox="0 0 860 520" xmlns="http://www.w3.org/2000/svg">
+    <!-- Background grid -->
+    <defs>
+      <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
+        <path d="M 60 0 L 0 0 0 60" fill="none" stroke="#162040" stroke-width="0.5"/>
+      </pattern>
+      <linearGradient id="bullGrad" x1="0" y1="1" x2="0" y2="0">
+        <stop offset="0%" stop-color="rgba(0,220,130,0.0)"/>
+        <stop offset="100%" stop-color="rgba(0,220,130,0.15)"/>
+      </linearGradient>
+      <linearGradient id="bearGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="rgba(255,59,92,0.0)"/>
+        <stop offset="100%" stop-color="rgba(255,59,92,0.15)"/>
+      </linearGradient>
+      <filter id="glow">
+        <feGaussianBlur stdDeviation="3" result="blur"/>
+        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <rect width="860" height="520" fill="#0a0e1a"/>
+    <rect width="860" height="520" fill="url(#grid)"/>
+
+    <!-- Price axis labels (right side) -->
+    <text x="820" y="28" fill="#4a5978" font-size="11" font-family="monospace">₹53,000</text>
+    <text x="820" y="88" fill="#4a5978" font-size="11" font-family="monospace">₹52,250</text>
+    <text x="820" y="158" fill="#4a5978" font-size="11" font-family="monospace">₹51,700</text>
+    <text x="820" y="218" fill="#4a5978" font-size="11" font-family="monospace">₹51,300</text>
+    <text x="820" y="278" fill="#4a5978" font-size="11" font-family="monospace">₹51,000</text>
+    <text x="820" y="358" fill="#4a5978" font-size="11" font-family="monospace">₹50,500</text>
+    <text x="820" y="438" fill="#4a5978" font-size="11" font-family="monospace">₹50,100</text>
+    <text x="820" y="498" fill="#4a5978" font-size="11" font-family="monospace">₹49,800</text>
+
+    <!-- ========== LAYER 1: ORDER BLOCKS (pink bands at top) ========== -->
+    <rect x="0" y="68" width="810" height="12" fill="rgba(236,72,153,0.15)" stroke="rgba(236,72,153,0.5)" stroke-width="1"/>
+    <rect x="0" y="82" width="810" height="10" fill="rgba(236,72,153,0.10)" stroke="rgba(236,72,153,0.4)" stroke-width="1"/>
+    <!-- Label -->
+    <rect x="6" y="56" width="160" height="22" rx="4" fill="rgba(236,72,153,0.15)" stroke="rgba(236,72,153,0.4)"/>
+    <text x="14" y="71" fill="#ec4899" font-size="11" font-weight="700">ORDER BLOCKS (Supply)</text>
+
+    <!-- ========== LAYER 2: VWAP LINE (blue) ========== -->
+    <line x1="0" y1="95" x2="810" y2="95" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="6,4" opacity="0.7"/>
+    <rect x="6" y="98" width="58" height="18" rx="3" fill="rgba(59,130,246,0.15)" stroke="rgba(59,130,246,0.4)"/>
+    <text x="14" y="111" fill="#60a5fa" font-size="10" font-weight="600">VWAP</text>
+
+    <!-- ========== LAYER 3: ABC CORRECTIVE WAVE (left side) ========== -->
+    <!-- Wave A -->
+    <circle cx="60" cy="360" r="16" fill="none" stroke="#f59e0b" stroke-width="2.5"/>
+    <text x="60" y="365" text-anchor="middle" fill="#f59e0b" font-size="14" font-weight="800">A</text>
+    <!-- Wave B -->
+    <circle cx="110" cy="170" r="16" fill="none" stroke="#f59e0b" stroke-width="2.5"/>
+    <text x="110" y="175" text-anchor="middle" fill="#f59e0b" font-size="14" font-weight="800">B</text>
+    <!-- Wave C -->
+    <circle cx="275" cy="440" r="16" fill="none" stroke="#f59e0b" stroke-width="2.5"/>
+    <text x="275" y="445" text-anchor="middle" fill="#f59e0b" font-size="14" font-weight="800">C</text>
+
+    <!-- ABC connecting lines (cyan dashed) -->
+    <line x1="60" y1="345" x2="110" y2="185" stroke="#00d4aa" stroke-width="2" stroke-dasharray="8,5"/>
+    <line x1="110" y1="185" x2="275" y2="425" stroke="#00d4aa" stroke-width="2" stroke-dasharray="8,5"/>
+
+    <!-- Label for ABC -->
+    <rect x="20" y="250" width="145" height="26" rx="6" fill="rgba(245,158,11,0.12)" stroke="rgba(245,158,11,0.4)"/>
+    <text x="28" y="268" fill="#f59e0b" font-size="12" font-weight="700">ABC Correction ▼</text>
+
+    <!-- ========== LAYER 4: NEW IMPULSE WAVE 1 (confirmed) ========== -->
+    <!-- Wave 1 circle (solid, confirmed) -->
+    <circle cx="370" cy="155" r="16" fill="rgba(0,220,130,0.15)" stroke="#00dc82" stroke-width="2.5"/>
+    <text x="370" y="160" text-anchor="middle" fill="#00dc82" font-size="14" font-weight="800">1</text>
+
+    <!-- Price path from C to 1 (green impulse) -->
+    <polyline points="275,440 300,400 320,350 340,300 350,250 355,200 365,170 370,155"
+              fill="none" stroke="#00dc82" stroke-width="2.5" opacity="0.7"/>
+
+    <!-- Label -->
+    <rect x="310" y="126" width="155" height="24" rx="5" fill="rgba(0,220,130,0.1)" stroke="rgba(0,220,130,0.3)"/>
+    <text x="318" y="142" fill="#00dc82" font-size="11" font-weight="700">Wave 1 (Confirmed) ✓</text>
+
+    <!-- ========== LAYER 5: FORMING WAVE 1? (tentative) ========== -->
+    <circle cx="530" cy="195" r="16" fill="none" stroke="#06b6d4" stroke-width="2" stroke-dasharray="4,3">
+      <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite"/>
+    </circle>
+    <text x="530" y="200" text-anchor="middle" fill="#06b6d4" font-size="13" font-weight="700">1?</text>
+
+    <!-- Forming wave label -->
+    <rect x="480" y="167" width="148" height="22" rx="5" fill="rgba(6,182,212,0.1)" stroke="rgba(6,182,212,0.3)" stroke-dasharray="4,3"/>
+    <text x="490" y="182" fill="#06b6d4" font-size="10" font-weight="600">Forming Wave (tentative)</text>
+
+    <!-- Pulsing dot at current price -->
+    <circle cx="720" cy="200" r="5" fill="#06b6d4">
+      <animate attributeName="r" values="4;7;4" dur="1.5s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;0.3;1" dur="1.5s" repeatCount="indefinite"/>
+    </circle>
+
+    <!-- Dashed green line from wave 1 to forming 1? -->
+    <line x1="370" y1="155" x2="530" y2="195" stroke="#06b6d4" stroke-width="1.5" stroke-dasharray="6,4" opacity="0.6"/>
+
+    <!-- ========== LAYER 6: SUB-WAVE A-B (right side) ========== -->
+    <circle cx="470" cy="290" r="14" fill="none" stroke="#f59e0b" stroke-width="2"/>
+    <text x="470" y="295" text-anchor="middle" fill="#f59e0b" font-size="12" font-weight="700">A</text>
+    <circle cx="620" cy="210" r="14" fill="none" stroke="#f59e0b" stroke-width="2"/>
+    <text x="620" y="215" text-anchor="middle" fill="#f59e0b" font-size="12" font-weight="700">B</text>
+
+    <line x1="470" y1="276" x2="620" y2="224" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="5,4" opacity="0.5"/>
+
+    <rect x="540" y="236" width="130" height="20" rx="4" fill="rgba(245,158,11,0.08)" stroke="rgba(245,158,11,0.3)"/>
+    <text x="548" y="250" fill="#f59e0b" font-size="10" font-weight="600">Sub-wave correction</text>
+
+    <!-- ========== LAYER 7: FIBONACCI LEVELS ========== -->
+    <!-- 0.382 retracement -->
+    <line x1="290" y1="280" x2="810" y2="280" stroke="#06b6d4" stroke-width="1" stroke-dasharray="4,6" opacity="0.5"/>
+    <text x="295" y="276" fill="#06b6d4" font-size="9" opacity="0.8">0.382 ret</text>
+
+    <!-- 0.618 retracement -->
+    <line x1="290" y1="340" x2="810" y2="340" stroke="#06b6d4" stroke-width="1" stroke-dasharray="4,6" opacity="0.5"/>
+    <text x="295" y="336" fill="#06b6d4" font-size="9" opacity="0.8">0.618 ret</text>
+
+    <!-- W1 retrace labels -->
+    <line x1="350" y1="195" x2="810" y2="195" stroke="#00dc82" stroke-width="1" stroke-dasharray="3,5" opacity="0.4"/>
+    <rect x="350" y="182" width="110" height="16" rx="3" fill="rgba(0,220,130,0.08)"/>
+    <text x="356" y="193" fill="#00dc82" font-size="9" opacity="0.8">W1 retrace (0.5)</text>
+
+    <line x1="350" y1="230" x2="810" y2="230" stroke="#00dc82" stroke-width="1" stroke-dasharray="3,5" opacity="0.4"/>
+    <rect x="350" y="218" width="120" height="16" rx="3" fill="rgba(0,220,130,0.08)"/>
+    <text x="356" y="229" fill="#00dc82" font-size="9" opacity="0.8">W1 retrace (0.382)</text>
+
+    <!-- ========== LAYER 8: YELLOW PROJECTION CONE ========== -->
+    <polygon points="275,440 370,155 500,300" fill="rgba(234,179,8,0.06)" stroke="rgba(234,179,8,0.25)" stroke-width="1" stroke-dasharray="6,4"/>
+    <text x="340" y="330" fill="rgba(234,179,8,0.6)" font-size="10" font-weight="600" transform="rotate(-20,340,330)">Projected Path</text>
+
+    <!-- ========== LAYER 9: GREEN DEMAND ZONE ========== -->
+    <rect x="500" y="190" width="130" height="25" fill="rgba(0,220,130,0.12)" stroke="rgba(0,220,130,0.3)" stroke-width="1" rx="2"/>
+    <text x="630" y="199" fill="#00dc82" font-size="11" font-weight="700" font-family="monospace">51,487</text>
+
+    <!-- ========== LAYER 10: INVALIDATION ZONE (red at bottom) ========== -->
+    <rect x="0" y="435" width="810" height="20" fill="rgba(255,59,92,0.08)"/>
+    <line x1="0" y1="440" x2="810" y2="440" stroke="#ff3b5c" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.6"/>
+    <rect x="650" y="430" width="80" height="20" rx="4" fill="rgba(255,59,92,0.2)" stroke="rgba(255,59,92,0.5)"/>
+    <text x="660" y="444" fill="#ff3b5c" font-size="11" font-weight="700" font-family="monospace">50,105</text>
+
+    <circle cx="740" cy="440" r="12" fill="rgba(255,59,92,0.2)" stroke="#ff3b5c" stroke-width="2"/>
+    <text x="740" y="445" text-anchor="middle" fill="#ff3b5c" font-size="12" font-weight="800">0</text>
+
+    <rect x="6" y="455" width="195" height="22" rx="4" fill="rgba(255,59,92,0.1)" stroke="rgba(255,59,92,0.3)"/>
+    <text x="14" y="470" fill="#ff3b5c" font-size="11" font-weight="600">⚠ INVALIDATION — Don't buy below</text>
+
+    <!-- ========== NUMBERED CALLOUT ARROWS ========== -->
+    <!-- Callout 1: Order Blocks -->
+    <line x1="780" y1="50" x2="780" y2="68" stroke="#ec4899" stroke-width="1.5"/>
+    <circle cx="780" cy="42" r="12" fill="#ec4899"/>
+    <text x="780" y="47" text-anchor="middle" fill="#fff" font-size="11" font-weight="800">1</text>
+
+    <!-- Callout 2: ABC Wave -->
+    <line x1="160" y1="310" x2="160" y2="280" stroke="#f59e0b" stroke-width="1.5"/>
+    <circle cx="160" cy="320" r="12" fill="#f59e0b"/>
+    <text x="160" y="325" text-anchor="middle" fill="#fff" font-size="11" font-weight="800">2</text>
+
+    <!-- Callout 3: Wave 1 -->
+    <line x1="400" y1="130" x2="400" y2="148" stroke="#00dc82" stroke-width="1.5"/>
+    <circle cx="400" cy="122" r="12" fill="#00dc82"/>
+    <text x="400" y="127" text-anchor="middle" fill="#fff" font-size="11" font-weight="800">3</text>
+
+    <!-- Callout 4: Fibonacci -->
+    <circle cx="280" cy="280" r="12" fill="#06b6d4"/>
+    <text x="280" y="285" text-anchor="middle" fill="#fff" font-size="11" font-weight="800">4</text>
+
+    <!-- Callout 5: Forming wave -->
+    <line x1="555" y1="167" x2="555" y2="183" stroke="#06b6d4" stroke-width="1.5"/>
+    <circle cx="555" cy="158" r="12" fill="#06b6d4"/>
+    <text x="555" y="163" text-anchor="middle" fill="#fff" font-size="11" font-weight="800">5</text>
+
+    <!-- Callout 6: Projection cone -->
+    <circle cx="360" cy="350" r="12" fill="#eab308"/>
+    <text x="360" y="355" text-anchor="middle" fill="#000" font-size="11" font-weight="800">6</text>
+
+    <!-- Callout 7: Invalidation -->
+    <circle cx="200" cy="440" r="12" fill="#ff3b5c"/>
+    <text x="200" y="445" text-anchor="middle" fill="#fff" font-size="11" font-weight="800">7</text>
+  </svg>
+</div>
+
+<!-- ============================================================ -->
+<!-- ELEMENT-BY-ELEMENT EXPLANATIONS -->
+<!-- ============================================================ -->
+<div class="sections">
+
+  <!-- SECTION 1: ORDER BLOCKS -->
+  <div class="section">
+    <h2><span class="badge" style="background:#ec4899; color:#fff">1</span> Order Blocks (Pink Bands at Top)</h2>
+    <div class="mini-diagram">
+      <svg viewBox="0 0 700 120" xmlns="http://www.w3.org/2000/svg">
+        <rect width="700" height="120" fill="#0a0e1a"/>
+        <!-- Price going up -->
+        <polyline points="50,100 150,80 250,60 300,30 350,15" fill="none" stroke="#00dc82" stroke-width="2"/>
+        <!-- Hits OB zone -->
+        <rect x="0" y="5" width="700" height="20" fill="rgba(236,72,153,0.2)" stroke="#ec4899" stroke-width="1"/>
+        <text x="360" y="18" text-anchor="middle" fill="#ec4899" font-size="12" font-weight="700">🏦 Big institutions SOLD here before</text>
+        <!-- Price rejects -->
+        <polyline points="350,15 400,30 450,50 550,80 650,100" fill="none" stroke="#ff3b5c" stroke-width="2"/>
+        <!-- Arrow showing rejection -->
+        <text x="400" y="45" fill="#ff3b5c" font-size="20">↩</text>
+        <text x="420" y="50" fill="#ff3b5c" font-size="11" font-weight="600">Price REJECTED here</text>
+      </svg>
+    </div>
+    <p>
+      <span class="highlight">Order Blocks are price zones where big institutions (banks, funds) placed large orders.</span>
+      When price returns to these zones, it often reverses because there are still unfilled orders waiting.
+    </p>
+    <p>
+      On your chart: The pink bands near <span class="highlight">₹52,250</span> are <span class="highlight" style="color:#ec4899">SUPPLY zones</span> —
+      price went down from here before. If price reaches this zone again, expect <strong>sellers to step in</strong>.
+    </p>
+  </div>
+
+  <!-- SECTION 2: ABC CORRECTION -->
+  <div class="section">
+    <h2><span class="badge" style="background:#f59e0b; color:#000">2</span> ABC Corrective Wave (The Zigzag)</h2>
+    <div class="mini-diagram">
+      <svg viewBox="0 0 700 180" xmlns="http://www.w3.org/2000/svg">
+        <rect width="700" height="180" fill="#0a0e1a"/>
+
+        <!-- Before: impulse up (waves 1-5) shown as simple rise -->
+        <polyline points="30,160 100,100 120,120 200,40 220,70 280,20"
+                  fill="none" stroke="#00dc82" stroke-width="2.5" opacity="0.4"/>
+        <text x="150" y="25" fill="#00dc82" font-size="11" font-weight="600" opacity="0.5">Previous Uptrend (1-2-3-4-5)</text>
+
+        <!-- ABC correction -->
+        <circle cx="320" cy="80" r="18" fill="none" stroke="#f59e0b" stroke-width="2.5"/>
+        <text x="320" y="86" text-anchor="middle" fill="#f59e0b" font-size="16" font-weight="800">A</text>
+
+        <circle cx="420" cy="40" r="18" fill="none" stroke="#f59e0b" stroke-width="2.5"/>
+        <text x="420" y="46" text-anchor="middle" fill="#f59e0b" font-size="16" font-weight="800">B</text>
+
+        <circle cx="540" cy="150" r="18" fill="none" stroke="#f59e0b" stroke-width="2.5"/>
+        <text x="540" y="156" text-anchor="middle" fill="#f59e0b" font-size="16" font-weight="800">C</text>
+
+        <!-- Lines -->
+        <line x1="280" y1="20" x2="320" y2="62" stroke="#00d4aa" stroke-width="2" stroke-dasharray="6,4"/>
+        <line x1="320" y1="98" x2="420" y2="58" stroke="#00d4aa" stroke-width="2" stroke-dasharray="6,4"/>
+        <line x1="420" y1="58" x2="540" y2="132" stroke="#00d4aa" stroke-width="2" stroke-dasharray="6,4"/>
+
+        <!-- Annotations -->
+        <text x="310" y="110" fill="#94a3b8" font-size="10">First drop</text>
+        <text x="405" y="28" fill="#94a3b8" font-size="10">Bounce (trap!)</text>
+        <text x="555" y="155" fill="#ff3b5c" font-size="10" font-weight="600">Final low ★</text>
+
+        <!-- After: new impulse beginning -->
+        <polyline points="540,150 580,120 620,90 660,70" fill="none" stroke="#00dc82" stroke-width="2.5"/>
+        <text x="610" y="60" fill="#00dc82" font-size="11" font-weight="700">New trend starts! →</text>
+      </svg>
+    </div>
+    <p>
+      After every big move up (waves 1-2-3-4-5), the market takes a <span class="highlight">"breather"</span> — this breather is the <span class="highlight" style="color:#f59e0b">ABC Correction</span>:
+    </p>
+    <div class="step-flow">
+      <div class="step-box" style="background:rgba(245,158,11,0.15); color:#f59e0b; border: 1px solid rgba(245,158,11,0.4)">A<br><span style="font-size:10px; font-weight:400">First drop</span></div>
+      <span class="step-arrow">→</span>
+      <div class="step-box" style="background:rgba(245,158,11,0.15); color:#f59e0b; border: 1px solid rgba(245,158,11,0.4)">B<br><span style="font-size:10px; font-weight:400">Bounce up</span></div>
+      <span class="step-arrow">→</span>
+      <div class="step-box" style="background:rgba(255,59,92,0.15); color:#ff3b5c; border: 1px solid rgba(255,59,92,0.4)">C<br><span style="font-size:10px; font-weight:400">Final low</span></div>
+      <span class="step-arrow">→</span>
+      <div class="step-box" style="background:rgba(0,220,130,0.15); color:#00dc82; border: 1px solid rgba(0,220,130,0.4)">NEW 1<br><span style="font-size:10px; font-weight:400">Buy zone!</span></div>
+    </div>
+    <p>
+      On your chart: <span class="highlight" style="color:#f59e0b">A</span> dropped to ~₹50,800,
+      <span class="highlight" style="color:#f59e0b">B</span> bounced to ~₹51,700, then
+      <span class="highlight" style="color:#f59e0b">C</span> made the final low at <span class="highlight" style="color:#ff3b5c">₹50,100</span>.
+      This is where smart money starts buying!
+    </p>
+  </div>
+
+  <!-- SECTION 3: CONFIRMED WAVE 1 -->
+  <div class="section">
+    <h2><span class="badge" style="background:#00dc82; color:#000">3</span> Wave 1 — New Trend Confirmed</h2>
+    <div class="mini-diagram">
+      <svg viewBox="0 0 700 140" xmlns="http://www.w3.org/2000/svg">
+        <rect width="700" height="140" fill="#0a0e1a"/>
+
+        <!-- C low -->
+        <circle cx="100" cy="120" r="14" fill="none" stroke="#f59e0b" stroke-width="2"/>
+        <text x="100" y="125" text-anchor="middle" fill="#f59e0b" font-size="12" font-weight="700">C</text>
+
+        <!-- Strong impulse up -->
+        <polyline points="100,120 180,90 260,60 340,35 420,20"
+                  fill="none" stroke="#00dc82" stroke-width="3"/>
+
+        <!-- Wave 1 -->
+        <circle cx="420" cy="20" r="16" fill="rgba(0,220,130,0.2)" stroke="#00dc82" stroke-width="2.5"/>
+        <text x="420" y="26" text-anchor="middle" fill="#00dc82" font-size="14" font-weight="800">1</text>
+
+        <!-- Solid border = confirmed -->
+        <text x="445" y="25" fill="#00dc82" font-size="11" font-weight="700">← Solid border = CONFIRMED</text>
+
+        <!-- Annotation: strong momentum -->
+        <rect x="140" y="50" width="160" height="24" rx="4" fill="rgba(0,220,130,0.08)" stroke="rgba(0,220,130,0.3)"/>
+        <text x="150" y="66" fill="#00dc82" font-size="11">Strong buying pressure ↑</text>
+
+        <!-- Green candles suggestion -->
+        <rect x="160" y="85" width="8" height="25" fill="#00dc82" rx="1"/>
+        <rect x="180" y="78" width="8" height="30" fill="#00dc82" rx="1"/>
+        <rect x="200" y="70" width="8" height="35" fill="#00dc82" rx="1"/>
+        <rect x="220" y="62" width="8" height="30" fill="#00dc82" rx="1"/>
+        <rect x="240" y="55" width="8" height="28" fill="#00dc82" rx="1"/>
+        <rect x="260" y="48" width="8" height="25" fill="#00dc82" rx="1"/>
+      </svg>
+    </div>
+    <p>
+      <span class="highlight">Wave 1 is the first strong push in the new direction.</span>
+      On your chart, after wave C hit ₹50,100, buyers stepped in and pushed price up to ~<span class="highlight" style="color:#00dc82">₹51,700</span>.
+    </p>
+    <p>
+      The <span class="highlight">solid circle border</span> around "1" means the engine has <strong>confirmed</strong> this wave —
+      enough price action validates it as a real impulse, not just noise.
+    </p>
+  </div>
+
+  <!-- SECTION 4: FIBONACCI LEVELS -->
+  <div class="section">
+    <h2><span class="badge" style="background:#06b6d4; color:#000">4</span> Fibonacci Retracement Levels</h2>
+    <div class="mini-diagram">
+      <svg viewBox="0 0 700 200" xmlns="http://www.w3.org/2000/svg">
+        <rect width="700" height="200" fill="#0a0e1a"/>
+
+        <!-- Wave move up -->
+        <polyline points="80,180 200,20" fill="none" stroke="#00dc82" stroke-width="2.5"/>
+        <circle cx="80" cy="180" r="8" fill="#f59e0b"/>
+        <text x="60" y="195" fill="#f59e0b" font-size="10">C (Low)</text>
+        <circle cx="200" cy="20" r="8" fill="#00dc82"/>
+        <text x="210" y="18" fill="#00dc82" font-size="10">Wave 1 (High)</text>
+
+        <!-- Fib levels -->
+        <line x1="250" y1="20" x2="700" y2="20" stroke="#64748b" stroke-width="0.5" stroke-dasharray="2,4"/>
+        <text x="260" y="16" fill="#64748b" font-size="10">0% (Top)</text>
+
+        <line x1="250" y1="81" x2="700" y2="81" stroke="#06b6d4" stroke-width="1" stroke-dasharray="4,4"/>
+        <rect x="260" y="68" width="175" height="20" rx="4" fill="rgba(6,182,212,0.1)"/>
+        <text x="268" y="82" fill="#06b6d4" font-size="11" font-weight="700">38.2% — Shallow pullback</text>
+
+        <line x1="250" y1="100" x2="700" y2="100" stroke="#06b6d4" stroke-width="1" stroke-dasharray="4,4"/>
+        <rect x="260" y="88" width="142" height="20" rx="4" fill="rgba(6,182,212,0.15)"/>
+        <text x="268" y="102" fill="#06b6d4" font-size="11" font-weight="700">50% — Key level ★</text>
+
+        <line x1="250" y1="119" x2="700" y2="119" stroke="#06b6d4" stroke-width="1" stroke-dasharray="4,4"/>
+        <rect x="260" y="108" width="185" height="20" rx="4" fill="rgba(6,182,212,0.1)"/>
+        <text x="268" y="122" fill="#06b6d4" font-size="11" font-weight="700">61.8% — Golden ratio (best!)</text>
+
+        <line x1="250" y1="180" x2="700" y2="180" stroke="#64748b" stroke-width="0.5" stroke-dasharray="2,4"/>
+        <text x="260" y="176" fill="#64748b" font-size="10">100% (Bottom)</text>
+
+        <!-- Buy zone highlight -->
+        <rect x="250" y="80" width="450" height="42" fill="rgba(0,220,130,0.06)" stroke="rgba(0,220,130,0.2)" stroke-width="1" stroke-dasharray="4,3" rx="4"/>
+        <text x="540" y="106" fill="#00dc82" font-size="12" font-weight="700">🎯 BUY ZONE</text>
+
+        <!-- Bounce arrow -->
+        <polyline points="500,119 500,90 520,70" fill="none" stroke="#00dc82" stroke-width="2" marker-end="url(#arrowG)"/>
+      </svg>
+    </div>
+    <p>
+      <span class="highlight">Fibonacci levels predict where price will pull back to before continuing.</span>
+      The engine measures the distance from Wave C (low) to Wave 1 (high) and draws horizontal lines at key ratios:
+    </p>
+    <div style="padding: 0 10px;">
+      <div class="legend-row">
+        <div class="legend-line" style="background:#06b6d4; opacity:0.5"></div>
+        <span class="legend-label" style="color:#06b6d4">38.2%</span>
+        <span class="legend-desc">Shallow pullback — strong trend keeps going</span>
+      </div>
+      <div class="legend-row">
+        <div class="legend-line" style="background:#06b6d4"></div>
+        <span class="legend-label" style="color:#06b6d4">50.0%</span>
+        <span class="legend-desc">Half retracement — very common bounce zone</span>
+      </div>
+      <div class="legend-row">
+        <div class="legend-line" style="background:#06b6d4; height: 4px;"></div>
+        <span class="legend-label" style="color:#00dc82">61.8% (Golden)</span>
+        <span class="legend-desc">Best buy zone — used by professionals worldwide</span>
+      </div>
+    </div>
+    <div class="tip-box">
+      <div class="tip-title">💡 HOW TO USE</div>
+      <p>After Wave 1 is confirmed, wait for price to pull back to the 38.2%–61.8% zone. That's your entry for Wave 3 (the biggest and most profitable wave!).</p>
+    </div>
+  </div>
+
+  <!-- SECTION 5: FORMING WAVE -->
+  <div class="section">
+    <h2><span class="badge" style="background:#06b6d4; color:#000">5</span> Forming Wave (1? — The Pulsing Dot)</h2>
+    <div class="mini-diagram">
+      <svg viewBox="0 0 700 130" xmlns="http://www.w3.org/2000/svg">
+        <rect width="700" height="130" fill="#0a0e1a"/>
+
+        <!-- Confirmed wave -->
+        <circle cx="150" cy="30" r="16" fill="rgba(0,220,130,0.2)" stroke="#00dc82" stroke-width="2.5"/>
+        <text x="150" y="36" text-anchor="middle" fill="#00dc82" font-size="14" font-weight="800">1</text>
+        <text x="150" y="62" text-anchor="middle" fill="#4a5978" font-size="10">Confirmed</text>
+        <text x="150" y="74" text-anchor="middle" fill="#4a5978" font-size="10">(solid border)</text>
+
+        <!-- Arrow -->
+        <text x="250" y="40" fill="#4a5978" font-size="24">→</text>
+
+        <!-- vs -->
+        <text x="310" y="42" fill="#64748b" font-size="14" font-weight="600">vs</text>
+
+        <!-- Arrow -->
+        <text x="360" y="40" fill="#4a5978" font-size="24">→</text>
+
+        <!-- Forming wave -->
+        <circle cx="460" cy="30" r="16" fill="none" stroke="#06b6d4" stroke-width="2" stroke-dasharray="4,3">
+          <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite"/>
+        </circle>
+        <text x="460" y="36" text-anchor="middle" fill="#06b6d4" font-size="13" font-weight="700">1?</text>
+        <text x="460" y="62" text-anchor="middle" fill="#4a5978" font-size="10">Tentative</text>
+        <text x="460" y="74" text-anchor="middle" fill="#4a5978" font-size="10">(dashed + pulsing)</text>
+
+        <!-- Current price dot pulsing -->
+        <circle cx="620" cy="30" r="6" fill="#06b6d4">
+          <animate attributeName="r" values="4;8;4" dur="1.5s" repeatCount="indefinite"/>
+          <animate attributeName="opacity" values="1;0.3;1" dur="1.5s" repeatCount="indefinite"/>
+        </circle>
+        <text x="620" y="62" text-anchor="middle" fill="#06b6d4" font-size="10">Pulsing dot =</text>
+        <text x="620" y="74" text-anchor="middle" fill="#06b6d4" font-size="10">live price tracking</text>
+      </svg>
+    </div>
+    <p>
+      The <span class="highlight" style="color:#06b6d4">dashed circle with "1?"</span> means the engine <strong>thinks</strong> a new wave might be forming,
+      but there's not enough data yet to confirm it. The <span class="highlight">question mark</span> means "possibly wave 1".
+    </p>
+    <p>
+      The <span class="highlight" style="color:#06b6d4">pulsing dot</span> tracks where the current live price is —
+      it moves in real-time as new candles come in every 30 seconds.
+    </p>
+    <div class="tip-box">
+      <div class="tip-title">💡 WHAT TO WATCH FOR</div>
+      <p>When the dashed circle turns into a solid circle, the wave is confirmed. Until then, treat it as a "heads up" — not a signal to trade yet.</p>
+    </div>
+  </div>
+
+  <!-- SECTION 6: PROJECTION CONE -->
+  <div class="section">
+    <h2><span class="badge" style="background:#eab308; color:#000">6</span> Yellow Projection Cone</h2>
+    <div class="mini-diagram">
+      <svg viewBox="0 0 700 160" xmlns="http://www.w3.org/2000/svg">
+        <rect width="700" height="160" fill="#0a0e1a"/>
+
+        <!-- Starting point -->
+        <circle cx="80" cy="140" r="12" fill="none" stroke="#f59e0b" stroke-width="2"/>
+        <text x="80" y="145" text-anchor="middle" fill="#f59e0b" font-size="12" font-weight="700">C</text>
+
+        <!-- Cone shape -->
+        <polygon points="80,140 350,10 600,50 500,130 200,150"
+                 fill="rgba(234,179,8,0.08)" stroke="rgba(234,179,8,0.3)" stroke-width="1.5" stroke-dasharray="6,4"/>
+
+        <!-- Expected path inside cone -->
+        <polyline points="80,140 180,60 230,90 350,20 400,50 500,30"
+                  fill="none" stroke="rgba(234,179,8,0.4)" stroke-width="1.5" stroke-dasharray="3,3"/>
+
+        <!-- Labels -->
+        <text x="250" y="55" fill="rgba(234,179,8,0.7)" font-size="11" font-weight="600">Expected price range</text>
+        <text x="250" y="72" fill="rgba(234,179,8,0.5)" font-size="10">for new impulse waves</text>
+
+        <!-- Top boundary label -->
+        <text x="400" y="18" fill="rgba(234,179,8,0.5)" font-size="9">Upper bound (optimistic)</text>
+        <!-- Bottom boundary -->
+        <text x="350" y="145" fill="rgba(234,179,8,0.5)" font-size="9">Lower bound (conservative)</text>
+      </svg>
+    </div>
+    <p>
+      The <span class="highlight" style="color:#eab308">yellow dashed triangle</span> shows the <strong>projected price range</strong>
+      for where the new impulse wave should travel. Think of it as a "corridor" — price is expected to stay within this cone
+      as the new waves (1-2-3-4-5) develop.
+    </p>
+    <p>
+      If price breaks <strong>above</strong> the cone → the move is stronger than expected (very bullish).<br>
+      If price breaks <strong>below</strong> the cone → the wave count may be wrong (re-evaluate).
+    </p>
+  </div>
+
+  <!-- SECTION 7: INVALIDATION -->
+  <div class="section">
+    <h2><span class="badge" style="background:#ff3b5c; color:#fff">7</span> Invalidation Level (Red Line — ₹50,105)</h2>
+    <div class="mini-diagram">
+      <svg viewBox="0 0 700 150" xmlns="http://www.w3.org/2000/svg">
+        <rect width="700" height="150" fill="#0a0e1a"/>
+
+        <!-- Red danger zone -->
+        <rect x="0" y="90" width="700" height="60" fill="rgba(255,59,92,0.08)"/>
+        <line x1="0" y1="90" x2="700" y2="90" stroke="#ff3b5c" stroke-width="2" stroke-dasharray="8,4"/>
+
+        <!-- Label -->
+        <text x="350" y="82" text-anchor="middle" fill="#ff3b5c" font-size="13" font-weight="700">━━ INVALIDATION LINE (₹50,105) ━━</text>
+
+        <!-- Above = safe -->
+        <rect x="200" y="30" width="300" height="36" rx="8" fill="rgba(0,220,130,0.1)" stroke="rgba(0,220,130,0.3)"/>
+        <text x="350" y="48" text-anchor="middle" fill="#00dc82" font-size="14" font-weight="700">✅ ABOVE = Wave count is VALID</text>
+        <text x="350" y="64" text-anchor="middle" fill="#94a3b8" font-size="10">Keep trading the bullish plan</text>
+
+        <!-- Below = danger -->
+        <rect x="200" y="102" width="300" height="36" rx="8" fill="rgba(255,59,92,0.1)" stroke="rgba(255,59,92,0.3)"/>
+        <text x="350" y="120" text-anchor="middle" fill="#ff3b5c" font-size="14" font-weight="700">❌ BELOW = Count is WRONG</text>
+        <text x="350" y="136" text-anchor="middle" fill="#94a3b8" font-size="10">Exit trades, wait for new count</text>
+      </svg>
+    </div>
+    <p>
+      This is your <span class="highlight" style="color:#ff3b5c">safety line</span>. Elliott Wave theory has strict rules —
+      if certain price levels break, the entire wave count becomes invalid.
+    </p>
+    <p>
+      The <span class="highlight" style="color:#ff3b5c">red "0" circle</span> at the bottom means
+      "if price goes here, everything resets to zero — start counting again."
+    </p>
+    <div class="tip-box" style="border-color: rgba(255,59,92,0.3); background: rgba(255,59,92,0.05);">
+      <div class="tip-title" style="color:#ff6b81">⚠️ TRADING RULE</div>
+      <p style="color:#fca5a5">Never hold a long (buy) trade if price drops below the invalidation level. This is where you place your stop-loss.</p>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- PUTTING IT ALL TOGETHER -->
+  <!-- ============================================================ -->
+  <div class="section" style="border-color: rgba(139,92,246,0.4);">
+    <h2 style="color:#a78bfa">🧩 Putting It All Together — Your Chart Right Now</h2>
+
+    <div class="mini-diagram">
+      <svg viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg">
+        <rect width="700" height="250" fill="#0a0e1a"/>
+
+        <!-- Timeline arrow -->
+        <line x1="30" y1="230" x2="670" y2="230" stroke="#2d3a5c" stroke-width="1.5"/>
+        <polygon points="670,225 685,230 670,235" fill="#2d3a5c"/>
+        <text x="690" y="234" fill="#4a5978" font-size="10">Time</text>
+
+        <!-- Phase 1: ABC happened -->
+        <rect x="40" y="60" width="180" height="150" rx="8" fill="rgba(245,158,11,0.05)" stroke="rgba(245,158,11,0.2)" stroke-dasharray="4,3"/>
+        <text x="130" y="50" text-anchor="middle" fill="#f59e0b" font-size="12" font-weight="700">PAST</text>
+        <text x="130" y="85" text-anchor="middle" fill="#f59e0b" font-size="11">ABC Correction</text>
+        <text x="130" y="100" text-anchor="middle" fill="#94a3b8" font-size="10">completed ✓</text>
+
+        <polyline points="60,100 100,80 140,120 180,180" fill="none" stroke="#f59e0b" stroke-width="2"/>
+        <text x="65" y="95" fill="#f59e0b" font-size="10" font-weight="700">A</text>
+        <text x="105" y="75" fill="#f59e0b" font-size="10" font-weight="700">B</text>
+        <text x="182" y="196" fill="#f59e0b" font-size="10" font-weight="700">C</text>
+
+        <!-- Phase 2: Wave 1 confirmed -->
+        <rect x="240" y="60" width="160" height="150" rx="8" fill="rgba(0,220,130,0.05)" stroke="rgba(0,220,130,0.2)"/>
+        <text x="320" y="50" text-anchor="middle" fill="#00dc82" font-size="12" font-weight="700">NOW</text>
+        <text x="320" y="85" text-anchor="middle" fill="#00dc82" font-size="11">Wave 1 impulse</text>
+        <text x="320" y="100" text-anchor="middle" fill="#94a3b8" font-size="10">confirmed ✓</text>
+
+        <polyline points="240,180 280,140 320,100 360,80" fill="none" stroke="#00dc82" stroke-width="2.5"/>
+        <circle cx="360" cy="80" r="10" fill="rgba(0,220,130,0.2)" stroke="#00dc82" stroke-width="2"/>
+        <text x="360" y="84" text-anchor="middle" fill="#00dc82" font-size="10" font-weight="800">1</text>
+
+        <!-- Phase 3: What to expect -->
+        <rect x="420" y="60" width="240" height="150" rx="8" fill="rgba(139,92,246,0.05)" stroke="rgba(139,92,246,0.2)" stroke-dasharray="4,3"/>
+        <text x="540" y="50" text-anchor="middle" fill="#a78bfa" font-size="12" font-weight="700">NEXT</text>
+        <text x="540" y="85" text-anchor="middle" fill="#a78bfa" font-size="11">Wave 2 pullback →</text>
+        <text x="540" y="100" text-anchor="middle" fill="#a78bfa" font-size="11">then Wave 3 🚀</text>
+
+        <!-- Expected wave path -->
+        <polyline points="420,80 460,120 480,130 520,60 560,80 600,40"
+                  fill="none" stroke="#a78bfa" stroke-width="2" stroke-dasharray="5,4"/>
+        <text x="462" y="145" fill="#a78bfa" font-size="9" font-weight="600">2 (buy here)</text>
+        <text x="600" y="35" fill="#a78bfa" font-size="9" font-weight="600">3 (target)</text>
+      </svg>
+    </div>
+
+    <h3 style="margin: 20px 0 12px; color: #e2e8f0;">The Story Your Chart is Telling:</h3>
+
+    <div style="display: flex; flex-direction: column; gap: 12px; padding-left: 8px; border-left: 3px solid #2d3a5c;">
+      <div style="padding: 10px 16px;">
+        <span style="color: #f59e0b; font-weight: 700; font-size: 16px;">①</span>
+        <span style="color: #e2e8f0; font-weight: 600;"> ABC correction finished</span>
+        <span style="color: #94a3b8;"> — the market dropped from ₹51,700 → ₹50,100 in A-B-C zigzag pattern. The downtrend is OVER.</span>
+      </div>
+      <div style="padding: 10px 16px;">
+        <span style="color: #00dc82; font-weight: 700; font-size: 16px;">②</span>
+        <span style="color: #e2e8f0; font-weight: 600;"> Wave 1 is confirmed at ₹51,700</span>
+        <span style="color: #94a3b8;"> — buyers pushed price up strongly from the C low. This is the first impulse of a new uptrend.</span>
+      </div>
+      <div style="padding: 10px 16px;">
+        <span style="color: #06b6d4; font-weight: 700; font-size: 16px;">③</span>
+        <span style="color: #e2e8f0; font-weight: 600;"> Forming wave (1?) is tentative</span>
+        <span style="color: #94a3b8;"> — the engine detects a possible new pivot. Watch if it confirms (solid border) or fails.</span>
+      </div>
+      <div style="padding: 10px 16px;">
+        <span style="color: #a78bfa; font-weight: 700; font-size: 16px;">④</span>
+        <span style="color: #e2e8f0; font-weight: 600;"> Wait for Wave 2 pullback to Fibonacci zone</span>
+        <span style="color: #94a3b8;"> — the sweet spot is ₹51,000–51,200 (38.2%–61.8% retracement). That's the ideal buy entry.</span>
+      </div>
+      <div style="padding: 10px 16px;">
+        <span style="color: #ec4899; font-weight: 700; font-size: 16px;">⑤</span>
+        <span style="color: #e2e8f0; font-weight: 600;"> Target: ₹52,250 order block zone</span>
+        <span style="color: #94a3b8;"> — but be careful here as institutional sellers may be waiting (pink bands).</span>
+      </div>
+      <div style="padding: 10px 16px;">
+        <span style="color: #ff3b5c; font-weight: 700; font-size: 16px;">⑥</span>
+        <span style="color: #e2e8f0; font-weight: 600;"> Stop-loss below ₹50,105</span>
+        <span style="color: #94a3b8;"> — if price breaks this red line, the entire wave count is invalid. Exit immediately.</span>
+      </div>
+    </div>
+
+    <!-- Trade plan summary -->
+    <h3 style="margin: 24px 0 12px; color: #e2e8f0;">Trade Plan Summary:</h3>
+    <div class="trade-card">
+      <div class="trade-item">
+        <div class="label">Bias</div>
+        <div class="value" style="color: #00dc82">📈 BULLISH</div>
+      </div>
+      <div class="trade-item">
+        <div class="label">Entry Zone</div>
+        <div class="value" style="color: #06b6d4">₹51,000 – 51,200</div>
+      </div>
+      <div class="trade-item">
+        <div class="label">Target</div>
+        <div class="value" style="color: #a78bfa">₹52,250+</div>
+      </div>
+      <div class="trade-item">
+        <div class="label">Stop Loss</div>
+        <div class="value" style="color: #ff3b5c">₹50,100</div>
+      </div>
+    </div>
+
+    <div class="tip-box" style="margin-top: 20px; border-color: rgba(139,92,246,0.3); background: rgba(139,92,246,0.05);">
+      <div class="tip-title" style="color:#a78bfa">🎯 KEY TAKEAWAY</div>
+      <p style="color:#c4b5fd">Your chart shows a completed ABC correction with a new Wave 1 impulse starting. This is one of the best setups in Elliott Wave theory — the start of a fresh impulse cycle. Wait for Wave 2 to pull back to the Fibonacci buy zone, then ride Wave 3 (typically the longest and strongest wave).</p>
+    </div>
+  </div>
+
+  <!-- COLOR LEGEND -->
+  <div class="section">
+    <h2>🎨 Quick Color Reference</h2>
+    <div style="padding: 0 10px;">
+      <div class="legend-row">
+        <div class="legend-dot" style="background:#00dc82"></div>
+        <span class="legend-label" style="color:#00dc82">Green</span>
+        <span class="legend-desc">Bullish — confirmed waves, buy signals, support zones</span>
+      </div>
+      <div class="legend-row">
+        <div class="legend-dot" style="background:#ff3b5c"></div>
+        <span class="legend-label" style="color:#ff3b5c">Red</span>
+        <span class="legend-desc">Bearish — invalidation, danger zones, stop-loss levels</span>
+      </div>
+      <div class="legend-row">
+        <div class="legend-dot" style="background:#f59e0b"></div>
+        <span class="legend-label" style="color:#f59e0b">Orange/Yellow</span>
+        <span class="legend-desc">Wave labels (A, B, C, 1, 2...) and projected paths</span>
+      </div>
+      <div class="legend-row">
+        <div class="legend-dot" style="background:#06b6d4"></div>
+        <span class="legend-label" style="color:#06b6d4">Cyan/Teal</span>
+        <span class="legend-desc">Fibonacci levels, FVGs, forming waves (tentative)</span>
+      </div>
+      <div class="legend-row">
+        <div class="legend-dot" style="background:#ec4899"></div>
+        <span class="legend-label" style="color:#ec4899">Pink/Magenta</span>
+        <span class="legend-desc">Order blocks — institutional supply/demand zones</span>
+      </div>
+      <div class="legend-row">
+        <div class="legend-dot" style="background:#3b82f6"></div>
+        <span class="legend-label" style="color:#3b82f6">Blue</span>
+        <span class="legend-desc">VWAP — volume-weighted average price bands</span>
+      </div>
+      <div class="legend-row">
+        <div class="legend-dot" style="background:#a78bfa"></div>
+        <span class="legend-label" style="color:#a78bfa">Purple</span>
+        <span class="legend-desc">Wave overlays, predictions, Elliott Wave analysis</span>
+      </div>
+      <div class="legend-row">
+        <div style="width:14px; height:14px; border-radius:50%; border: 2px dashed #06b6d4; flex-shrink:0;"></div>
+        <span class="legend-label" style="color:#06b6d4">Dashed circle</span>
+        <span class="legend-desc">Tentative / unconfirmed — wait for solid confirmation</span>
+      </div>
+      <div class="legend-row">
+        <div style="width:14px; height:14px; border-radius:50%; border: 2.5px solid #00dc82; background: rgba(0,220,130,0.2); flex-shrink:0;"></div>
+        <span class="legend-label" style="color:#00dc82">Solid circle</span>
+        <span class="legend-desc">Confirmed — the engine has validated this wave/signal</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

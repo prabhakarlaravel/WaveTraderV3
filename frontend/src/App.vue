@@ -1,10 +1,32 @@
 <script setup>
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { RouterView, useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from './stores/useAuthStore'
 
 const auth = useAuthStore()
 const router = useRouter()
 const route = useRoute()
+
+// Live clock — ticks every second
+const nowTick = ref(Date.now())
+let clockInterval = null
+
+onMounted(() => {
+  clockInterval = setInterval(() => { nowTick.value = Date.now() }, 1000)
+})
+onUnmounted(() => {
+  if (clockInterval) clearInterval(clockInterval)
+})
+
+const liveClock = computed(() => {
+  const _tick = nowTick.value
+  const now = new Date()
+  const ist = new Date(now.getTime() + (5.5 * 60 * 60 * 1000) + (now.getTimezoneOffset() * 60 * 1000))
+  const h = String(ist.getHours()).padStart(2, '0')
+  const m = String(ist.getMinutes()).padStart(2, '0')
+  const s = String(ist.getSeconds()).padStart(2, '0')
+  return `${h}:${m}:${s}`
+})
 
 async function handleLogout() {
   await auth.logout()
@@ -46,6 +68,12 @@ const navLinks = [
         </div>
 
         <div class="nav-spacer"></div>
+
+        <!-- Live Clock (IST) -->
+        <div class="nav-clock">
+          <span class="nav-clock-time">{{ liveClock }}</span>
+          <span class="nav-clock-zone">IST</span>
+        </div>
 
         <!-- User + Logout -->
         <div class="nav-user">
@@ -158,6 +186,20 @@ button { transition: all .1s; }
   cursor: pointer; font-family: var(--sans);
 }
 .btn-logout:hover { color: var(--text); background: var(--card-alt); }
+
+.nav-clock {
+  display: flex; align-items: baseline; gap: 4px;
+  padding: 0 10px;
+  font-family: var(--mono);
+  border-right: 1px solid var(--border);
+  margin-right: 2px;
+}
+.nav-clock-time {
+  font-size: 14px; font-weight: 700; color: #e2e8f0; letter-spacing: 1px;
+}
+.nav-clock-zone {
+  font-size: 8px; font-weight: 600; color: #64748b; letter-spacing: 0.5px;
+}
 
 .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 </style>
