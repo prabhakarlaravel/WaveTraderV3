@@ -271,12 +271,6 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
         compact
       />
 
-      <!-- Live Clock (IST) -->
-      <div class="live-clock">
-        <span class="clock-time">{{ liveClock }}</span>
-        <span class="clock-zone">IST</span>
-      </div>
-
       <div class="toolbar-sep"></div>
 
       <!-- Timeframe tabs -->
@@ -296,6 +290,14 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
       </button>
 
       <div class="toolbar-spacer"></div>
+
+      <!-- Live Clock (IST) — left of price -->
+      <div class="live-clock">
+        <span class="clock-time">{{ liveClock }}</span>
+        <span class="clock-zone">IST</span>
+      </div>
+
+      <div class="toolbar-sep"></div>
 
       <!-- Price display -->
       <div class="price-display">
