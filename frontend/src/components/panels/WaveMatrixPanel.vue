@@ -42,11 +42,14 @@ onUnmounted(() => {
   if (refreshInterval) clearInterval(refreshInterval)
 })
 
-// Also refresh when overlays update (triggered by WS candle events)
+// Refresh when overlays update (triggered by WS candle events or poll cycle)
+// Use 3-second debounce to avoid hammering backend while still being responsive
+let _mtfDebounce = null
 watch(() => chartStore.overlays, () => {
-  // Debounce: only refresh if last refresh was >10s ago
-  if (lastRefresh.value && (Date.now() - lastRefresh.value.getTime()) < 10000) return
-  fetchMtfWaves()
+  if (_mtfDebounce) clearTimeout(_mtfDebounce)
+  _mtfDebounce = setTimeout(() => {
+    if (!loading.value) fetchMtfWaves()
+  }, 3000)
 }, { deep: false })
 
 // Confluence data from overlays
@@ -59,16 +62,31 @@ const action = computed(() => {
   return { direction: dir, pct, action: act, isBuy: dir === 'BULL', isSell: dir === 'BEAR' }
 })
 
-// Call/Put recommendation — derived from HTF bias (trend) + confluence signal
+// Call/Put recommendation — uses TF-weighted HTF bias + wave position context + reversal detection
 // Updates live via Reverb: overlays watcher → fetchMtfWaves() → mtfData + confluence refresh
 const callPutRec = computed(() => {
-  const htfBias = mtfData.value?.htfBias   // 'BULL' | 'BEAR' | 'NEUTRAL'
   const signal  = confluence.value?.direction // 'BULL' | 'BEAR'
   const pct     = confluence.value?.pct ?? 0
+  const isConflict = confluence.value?.conflict ?? false
+  const waveContext = confluence.value?.waveContext ?? null
   const activeTf = getTfRow(chartStore.activeTimeframe)
 
-  // Use active TF trend as secondary source if HTF bias not set
-  const trend = htfBias || (activeTf?.trend === 'bullish' ? 'BULL' : activeTf?.trend === 'bearish' ? 'BEAR' : 'NEUTRAL')
+  // TF-weighted HTF bias: 1D=3, 4H=2, 1H=1.5, 15M=1, 5M=0.5, 1M=0.5
+  const tfWeights = { '1D': 3, '4H': 2, '1H': 1.5, '15M': 1, '5M': 0.5, '1M': 0.5 }
+  let weightedBull = 0, weightedBear = 0
+  for (const tf of ['1D', '4H', '1H', '15M', '5M', '1M']) {
+    const row = getTfRow(tf)
+    if (!row) continue
+    const w = tfWeights[tf] || 1
+    if (row.trend === 'bullish') weightedBull += w
+    else if (row.trend === 'bearish') weightedBear += w
+  }
+  const trend = weightedBull > weightedBear ? 'BULL' : weightedBear > weightedBull ? 'BEAR' : 'NEUTRAL'
+
+  // Check for reversal: wave C ending + strong counter-trend signal
+  const htfWave = getTfRow('1D')?.wave || getTfRow('4H')?.wave || null
+  const isReversalSetup = (htfWave === 'C' || waveContext === 'correction_ending') && pct >= 50
+  const isImpulseEnding = (htfWave === '5' || waveContext === 'impulse_ending') && pct >= 50
 
   if (!signal || trend === 'NEUTRAL') {
     return {
@@ -80,6 +98,43 @@ const callPutRec = computed(() => {
       trendDetail: 'No clear direction',
       signalDetail: 'Wait for breakout',
       why: 'No directional edge — avoid forced trades.',
+    }
+  }
+
+  // REVERSAL SETUP: After wave C, strong bullish signal → BUY CALL (reversal)
+  if (isReversalSetup && signal === 'BULL') {
+    return {
+      rec: 'BUY CALL', emoji: '🔄', conf: Math.round(pct * 0.85),
+      color: '#10b981', borderColor: 'rgba(16,185,129,0.3)', bgClass: 'cp-call',
+      trendLabel: '🔄 REVERSAL', trendColor: '#10b981',
+      signalLabel: '● BULLISH', signalColor: '#34d399',
+      trendDetail: `Correction ending (Wave ${htfWave})`,
+      signalDetail: 'New impulse forming · reversal setup',
+      why: 'Wave C complete — new bullish impulse expected. BUY CALL.',
+    }
+  }
+  if (isReversalSetup && signal === 'BEAR') {
+    return {
+      rec: 'BUY PUT', emoji: '🔄', conf: Math.round(pct * 0.85),
+      color: '#ef4444', borderColor: 'rgba(239,68,68,0.3)', bgClass: 'cp-put',
+      trendLabel: '🔄 REVERSAL', trendColor: '#ef4444',
+      signalLabel: '● BEARISH', signalColor: '#f87171',
+      trendDetail: `Correction ending (Wave ${htfWave})`,
+      signalDetail: 'New bearish impulse forming',
+      why: 'Wave C complete — new bearish impulse expected. BUY PUT.',
+    }
+  }
+
+  // IMPULSE ENDING: Wave 5 → expect correction, caution
+  if (isImpulseEnding) {
+    return {
+      rec: signal === 'BULL' ? 'CAUTION CALL' : 'BUY PUT', emoji: '⚠️', conf: Math.round(pct * 0.6),
+      color: '#f59e0b', borderColor: 'rgba(245,158,11,0.3)', bgClass: 'cp-caution',
+      trendLabel: '⚠ EXHAUSTION', trendColor: '#f59e0b',
+      signalLabel: signal === 'BULL' ? '● BULLISH' : '● BEARISH', signalColor: signal === 'BULL' ? '#34d399' : '#f87171',
+      trendDetail: `Wave 5 nearing end`,
+      signalDetail: 'Correction expected soon — reduce position size',
+      why: 'Impulse wave 5 ending — correction ABC imminent.',
     }
   }
 
@@ -96,29 +151,48 @@ const callPutRec = computed(() => {
     }
   }
 
-  // UP trend + Bearish → pullback, hedge with PUT
+  // UP trend + Bearish → pullback, hedge with PUT (but check if it's a strong reversal signal)
   if (trend === 'BULL' && signal === 'BEAR') {
+    const isStrongBearish = pct >= 70
     return {
-      rec: 'BUY PUT', emoji: '⚡', conf: Math.round(pct * 0.75),
-      color: '#f59e0b', borderColor: 'rgba(245,158,11,0.3)', bgClass: 'cp-caution',
+      rec: isStrongBearish ? 'BUY PUT' : 'HEDGE PUT',
+      emoji: isStrongBearish ? '📉' : '⚡',
+      conf: Math.round(pct * (isStrongBearish ? 0.8 : 0.65)),
+      color: isStrongBearish ? '#ef4444' : '#f59e0b',
+      borderColor: isStrongBearish ? 'rgba(239,68,68,0.3)' : 'rgba(245,158,11,0.3)',
+      bgClass: isStrongBearish ? 'cp-put' : 'cp-caution',
       trendLabel: '▲ UP TREND', trendColor: '#10b981',
       signalLabel: '● BEARISH', signalColor: '#f87171',
       trendDetail: 'Broader trend bullish',
       signalDetail: `${activeTf?.wave ? 'Wave ' + activeTf.wave : ''} pullback in progress`.trim(),
-      why: 'Uptrend pullback detected — hedge longs, short-term PUT.',
+      why: isStrongBearish
+        ? 'Strong bearish signal in uptrend — short-term PUT.'
+        : 'Mild pullback in uptrend — small hedge PUT only.',
     }
   }
 
-  // DOWN trend + Bullish → bounce, sell the rally with PUT
+  // DOWN trend + Bullish → check for genuine reversal vs dead cat bounce
   if (trend === 'BEAR' && signal === 'BULL') {
+    const isStrongBullish = pct >= 70
+    if (isStrongBullish) {
+      return {
+        rec: 'BUY CALL', emoji: '🔄', conf: Math.round(pct * 0.75),
+        color: '#10b981', borderColor: 'rgba(16,185,129,0.3)', bgClass: 'cp-call',
+        trendLabel: '▼ DOWN TREND', trendColor: '#ef4444',
+        signalLabel: '● STRONG BULL', signalColor: '#34d399',
+        trendDetail: 'Trend bearish but momentum shifting',
+        signalDetail: 'Strong buy signals — possible trend reversal',
+        why: 'Strong bullish momentum in downtrend — reversal CALL setup.',
+      }
+    }
     return {
-      rec: 'BUY PUT', emoji: '📉', conf: Math.round(pct * 0.8),
+      rec: 'BUY PUT', emoji: '📉', conf: Math.round(pct * 0.7),
       color: '#ef4444', borderColor: 'rgba(239,68,68,0.3)', bgClass: 'cp-put',
       trendLabel: '▼ DOWN TREND', trendColor: '#ef4444',
       signalLabel: '● BULLISH', signalColor: '#34d399',
       trendDetail: 'LL + LH structure',
-      signalDetail: 'Bounce in downtrend',
-      why: 'Downtrend bounce — sell the rally, stay on PUT side.',
+      signalDetail: 'Bounce in downtrend — weak signal',
+      why: 'Weak bullish signal in downtrend — sell the rally, PUT.',
     }
   }
 
@@ -236,6 +310,16 @@ function buildWaveSvg(waveLabels) {
   return { points, fullLine, impLine, corLine, minP, maxP, svgW, svgH }
 }
 
+// Cached SVG data per timeframe — avoids calling buildWaveSvg() 3× in template
+const waveSvgCache = computed(() => {
+  const cache = {}
+  for (const tf of timeframes) {
+    const row = getTfRow(tf)
+    cache[tf] = row?.waveLabels?.length >= 3 ? buildWaveSvg(row.waveLabels) : null
+  }
+  return cache
+})
+
 // Live timer for "last updated X seconds ago"
 const timeSinceRefresh = ref('')
 let timerInterval = null
@@ -336,8 +420,8 @@ function formatPrice(p) {
             <span class="wr-expand" :class="{ open: expandedTf === tf }">▸</span>
           </div>
 
-          <!-- Expanded wave chart for this TF -->
-          <div v-if="expandedTf === tf && getTfRow(tf)?.waveLabels?.length >= 3" class="wave-chart-panel">
+          <!-- Expanded wave chart for this TF (uses cached SVG data) -->
+          <div v-if="expandedTf === tf && waveSvgCache[tf]" class="wave-chart-panel">
             <div class="wc-header">
               <span class="wc-tf">{{ tf }} — {{ getTfRow(tf).degree }}</span>
               <span class="wc-phase" :class="getTfRow(tf).phase === 'CORRECTION' ? 'phase-cor' : 'phase-imp'">
@@ -345,34 +429,33 @@ function formatPrice(p) {
               </span>
             </div>
 
-            <svg v-if="buildWaveSvg(getTfRow(tf).waveLabels)"
-              class="wave-svg" :viewBox="`0 0 ${buildWaveSvg(getTfRow(tf).waveLabels).svgW} ${buildWaveSvg(getTfRow(tf).waveLabels).svgH}`">
+            <svg class="wave-svg" :viewBox="`0 0 ${waveSvgCache[tf].svgW} ${waveSvgCache[tf].svgH}`">
 
               <!-- Grid lines -->
-              <line x1="20" y1="30" :x2="buildWaveSvg(getTfRow(tf).waveLabels).svgW - 10" y2="30" class="grid-line"/>
-              <line x1="20" y1="65" :x2="buildWaveSvg(getTfRow(tf).waveLabels).svgW - 10" y2="65" class="grid-line"/>
-              <line x1="20" y1="100" :x2="buildWaveSvg(getTfRow(tf).waveLabels).svgW - 10" y2="100" class="grid-line"/>
+              <line x1="20" y1="30" :x2="waveSvgCache[tf].svgW - 10" y2="30" class="grid-line"/>
+              <line x1="20" y1="65" :x2="waveSvgCache[tf].svgW - 10" y2="65" class="grid-line"/>
+              <line x1="20" y1="100" :x2="waveSvgCache[tf].svgW - 10" y2="100" class="grid-line"/>
 
               <!-- Price labels -->
-              <text x="3" y="33" class="price-lbl">{{ formatPrice(buildWaveSvg(getTfRow(tf).waveLabels).maxP) }}</text>
-              <text x="3" y="103" class="price-lbl">{{ formatPrice(buildWaveSvg(getTfRow(tf).waveLabels).minP) }}</text>
+              <text x="3" y="33" class="price-lbl">{{ formatPrice(waveSvgCache[tf].maxP) }}</text>
+              <text x="3" y="103" class="price-lbl">{{ formatPrice(waveSvgCache[tf].minP) }}</text>
 
               <!-- Full connected wave path (thin gray) -->
-              <polyline :points="buildWaveSvg(getTfRow(tf).waveLabels).fullLine"
+              <polyline :points="waveSvgCache[tf].fullLine"
                 fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1.5"/>
 
               <!-- Impulse segments (thick purple) -->
-              <polyline v-if="buildWaveSvg(getTfRow(tf).waveLabels).impLine"
-                :points="buildWaveSvg(getTfRow(tf).waveLabels).impLine"
+              <polyline v-if="waveSvgCache[tf].impLine"
+                :points="waveSvgCache[tf].impLine"
                 class="wave-line imp-line"/>
 
               <!-- Correction segments (dashed orange) -->
-              <polyline v-if="buildWaveSvg(getTfRow(tf).waveLabels).corLine"
-                :points="buildWaveSvg(getTfRow(tf).waveLabels).corLine"
+              <polyline v-if="waveSvgCache[tf].corLine"
+                :points="waveSvgCache[tf].corLine"
                 class="wave-line cor-line"/>
 
               <!-- Wave label circles + text -->
-              <template v-for="(pt, idx) in buildWaveSvg(getTfRow(tf).waveLabels).points" :key="idx">
+              <template v-for="(pt, idx) in waveSvgCache[tf].points" :key="idx">
                 <circle :cx="pt.x" :cy="pt.y" r="10"
                   :class="pt.isCorrection ? 'label-bg-cor' : 'label-bg-imp'"/>
                 <text :x="pt.x" :y="pt.y + 4" text-anchor="middle"
@@ -391,8 +474,9 @@ function formatPrice(p) {
                   style="font-size:7px;fill:#888;font-weight:600">◄ NOW</text>
               </template>
             </svg>
-
-            <div v-else class="wc-empty">Not enough wave data for {{ tf }}</div>
+          </div>
+          <div v-else-if="expandedTf === tf" class="wave-chart-panel">
+            <div class="wc-empty">Not enough wave data for {{ tf }}</div>
           </div>
         </template>
       </div>

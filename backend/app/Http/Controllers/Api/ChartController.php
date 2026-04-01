@@ -313,10 +313,21 @@ class ChartController extends Controller
         $alignment = max($bullCount, $bearCount);
         $htfBias = $bullCount > $bearCount ? 'BULL' : ($bearCount > $bullCount ? 'BEAR' : 'NEUTRAL');
 
-        // Trend progress: estimate how far through the current wave cycle
-        // Based on the highest TF's wave position
+        // Trend progress: smart calculation using HTF wave + LTF forming wave awareness
         $htfWave = $tfData['1D']['wave'] ?? $tfData['4H']['wave'] ?? null;
-        $trendProgress = $this->estimateTrendProgress($htfWave);
+        $htfWaveLabels = $tfData['1D']['waveLabels'] ?? $tfData['4H']['waveLabels'] ?? [];
+
+        // Check if LTF shows a new impulse forming after correction end
+        $ltfFormingNewCycle = false;
+        foreach (['1H', '15M', '5M'] as $ltfKey) {
+            $ltfWave = $tfData[$ltfKey]['wave'] ?? null;
+            if ($htfWave === 'C' && in_array($ltfWave, ['1', '2', '3'])) {
+                $ltfFormingNewCycle = true;
+                break;
+            }
+        }
+
+        $trendProgress = $this->estimateTrendProgress($htfWave, $htfWaveLabels, $ltfFormingNewCycle);
 
         return response()->json([
             'symbol' => $symbol->ticker,
@@ -328,20 +339,92 @@ class ChartController extends Controller
         ]);
     }
 
-    private function estimateTrendProgress(?string $wave): array
+    /**
+     * Calculate trend progress with context awareness.
+     * Uses wave position + LTF new cycle detection for accurate progress.
+     */
+    private function estimateTrendProgress(?string $wave, array $waveLabels = [], bool $ltfFormingNewCycle = false): array
     {
+        // If HTF is at wave C but LTF shows new impulse forming → transition state
+        if ($wave === 'C' && $ltfFormingNewCycle) {
+            return ['pct' => 5, 'label' => 'NEW IMPULSE FORMING', 'stage' => 'start'];
+        }
+
+        // Calculate intra-wave progress from wave labels if available
+        if (! empty($waveLabels) && $wave) {
+            $progress = $this->calculateIntraWaveProgress($wave, $waveLabels);
+            if ($progress !== null) {
+                return $progress;
+            }
+        }
+
+        // Fallback: static mapping with more granular stages
         $progressMap = [
-            '1' => ['pct' => 15, 'label' => 'JUST STARTED', 'stage' => 'start'],
-            '2' => ['pct' => 25, 'label' => 'EARLY', 'stage' => 'start'],
-            '3' => ['pct' => 50, 'label' => 'MIDDLE', 'stage' => 'middle'],
-            '4' => ['pct' => 65, 'label' => 'PAST MIDDLE', 'stage' => 'middle'],
-            '5' => ['pct' => 85, 'label' => 'NEAR END', 'stage' => 'end'],
-            'A' => ['pct' => 40, 'label' => 'CORRECTION START', 'stage' => 'start'],
-            'B' => ['pct' => 60, 'label' => 'CORRECTION MIDDLE', 'stage' => 'middle'],
-            'C' => ['pct' => 85, 'label' => 'CORRECTION END', 'stage' => 'end'],
+            '1' => ['pct' => 12, 'label' => 'IMPULSE STARTING', 'stage' => 'start'],
+            '2' => ['pct' => 22, 'label' => 'EARLY PULLBACK', 'stage' => 'start'],
+            '3' => ['pct' => 45, 'label' => 'STRONGEST MOVE', 'stage' => 'middle'],
+            '4' => ['pct' => 65, 'label' => 'CONSOLIDATION', 'stage' => 'middle'],
+            '5' => ['pct' => 82, 'label' => 'FINAL PUSH', 'stage' => 'end'],
+            'A' => ['pct' => 35, 'label' => 'CORRECTION START', 'stage' => 'start'],
+            'B' => ['pct' => 55, 'label' => 'CORRECTION BOUNCE', 'stage' => 'middle'],
+            'C' => ['pct' => 80, 'label' => 'CORRECTION END', 'stage' => 'end'],
         ];
 
-        return $progressMap[$wave] ?? ['pct' => 50, 'label' => 'UNKNOWN', 'stage' => 'middle'];
+        return $progressMap[$wave] ?? ['pct' => 50, 'label' => 'ANALYZING', 'stage' => 'middle'];
+    }
+
+    /**
+     * Calculate progress within the current wave using Fibonacci price ratios.
+     * Returns percentage of how far through the full cycle (impulse + correction).
+     */
+    private function calculateIntraWaveProgress(string $currentWave, array $waveLabels): ?array
+    {
+        if (count($waveLabels) < 2) {
+            return null;
+        }
+
+        // Map wave labels to cycle phase percentages (start → end of that wave)
+        // Full cycle: 1(0-12) → 2(12-22) → 3(22-50) → 4(50-65) → 5(65-82) → A(82-88) → B(88-93) → C(93-100)
+        $phaseRanges = [
+            '1' => [0, 12],
+            '2' => [12, 22],
+            '3' => [22, 50],
+            '4' => [50, 65],
+            '5' => [65, 82],
+            'A' => [82, 88],
+            'B' => [88, 93],
+            'C' => [93, 100],
+        ];
+
+        if (! isset($phaseRanges[$currentWave])) {
+            return null;
+        }
+
+        [$rangeStart, $rangeEnd] = $phaseRanges[$currentWave];
+
+        // Use midpoint of the phase range as the progress
+        $pct = (int) round(($rangeStart + $rangeEnd) / 2);
+
+        // Determine stage
+        $stage = $pct < 30 ? 'start' : ($pct < 70 ? 'middle' : 'end');
+
+        // Labels with wave context
+        $labels = [
+            '1' => 'IMPULSE WAVE 1',
+            '2' => 'PULLBACK WAVE 2',
+            '3' => 'STRONGEST WAVE 3',
+            '4' => 'CONSOLIDATION WAVE 4',
+            '5' => 'FINAL WAVE 5',
+            'A' => 'CORRECTION WAVE A',
+            'B' => 'CORRECTION WAVE B',
+            'C' => 'CORRECTION WAVE C',
+        ];
+
+        return [
+            'pct' => $pct,
+            'label' => $labels[$currentWave] ?? 'WAVE ' . $currentWave,
+            'stage' => $stage,
+        ];
     }
 
     public function symbols(): JsonResponse

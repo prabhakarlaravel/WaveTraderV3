@@ -347,10 +347,13 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
               </div>
             </div>
           </div>
-          <div :class="['bias-card', confluence?.pct >= 60 ? 'bull' : 'warn']" style="min-width: 180px">
+          <div :class="['bias-card', confluence?.conflict ? 'conflict' : confluence?.pct >= 60 ? 'bull' : 'warn']" style="min-width: 180px">
             <div>
-              <div class="bias-label">Action ({{ confluence?.pct || 0 }}%)</div>
-              <div class="bias-value" :style="{ color: confluence?.pct >= 60 ? 'var(--bull)' : 'var(--ob)' }">
+              <div class="bias-label">
+                Action ({{ confluence?.pct || 0 }}%)
+                <span v-if="confluence?.conflict" style="color: #f59e0b; font-size: 8px"> ⚠ CONFLICT</span>
+              </div>
+              <div class="bias-value" :style="{ color: confluence?.conflict ? '#f59e0b' : confluence?.pct >= 60 ? 'var(--bull)' : 'var(--ob)' }">
                 {{ confluence?.action || 'ANALYZING...' }}
               </div>
             </div>
@@ -461,6 +464,8 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
 .bias-card.bull { background: var(--bull-fade); border: 1px solid var(--bull-line); }
 .bias-card.bear { background: var(--bear-fade); border: 1px solid var(--bear-line); }
 .bias-card.warn { background: rgba(245,158,11,0.06); border: 1px solid rgba(245,158,11,0.25); }
+.bias-card.conflict { background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.4); animation: conflict-pulse 2s infinite; }
+@keyframes conflict-pulse { 0%,100% { border-color: rgba(245,158,11,0.4); } 50% { border-color: rgba(245,158,11,0.8); } }
 .bias-arrow { font-size: 16px; color: var(--muted); display: inline-block; }
 .bias-label { font-size: 10px; color: var(--muted); }
 .bias-value { font-family: var(--mono); font-size: 12px; font-weight: 700; }

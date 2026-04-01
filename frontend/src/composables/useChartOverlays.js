@@ -740,22 +740,40 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     const nextWave = nextTargets.nextWave
     const retracements = nextTargets.retracements || []
 
-    // Render each target zone
-    targets.forEach((t, i) => {
+    // Anti-overlap: collect Y positions and offset labels that are too close
+    const yPositions = []
+    const targetData = targets.map(t => {
       const y = candleSeriesRef.value.priceToCoordinate(t.price)
-      if (y === null || y < 0 || y > 2000) return
+      return { ...t, y }
+    }).filter(t => t.y !== null && t.y > 0 && t.y < 2000)
 
+    // Sort by Y position and apply anti-overlap (min 18px apart for labels)
+    targetData.sort((a, b) => a.y - b.y)
+    const adjustedY = []
+    for (let i = 0; i < targetData.length; i++) {
+      let labelY = targetData[i].y
+      if (i > 0 && labelY - adjustedY[i - 1] < 18) {
+        labelY = adjustedY[i - 1] + 18
+      }
+      adjustedY.push(labelY)
+    }
+
+    // Render each target zone with improved visibility
+    targetData.forEach((t, i) => {
+      const y = t.y
+      const labelYAdj = adjustedY[i]
       const color = t.color || '#8b5cf6'
       const isPrimary = t.type === 'primary'
-      const opacity = isPrimary ? 0.2 : 0.12
-      const lineOpacity = isPrimary ? 0.7 : 0.4
-      const zoneHeight = isPrimary ? 16 : 10
+      const isExtended = t.type === 'extended'
+      const opacity = isPrimary ? 0.22 : isExtended ? 0.15 : 0.1
+      const lineOpacity = isPrimary ? 0.75 : isExtended ? 0.55 : 0.35
+      const zoneHeight = isPrimary ? 18 : isExtended ? 14 : 10
 
-      // Target zone rectangle (pulsing)
+      // Target zone rectangle (pulsing for primary)
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-      rect.setAttribute('x', chartWidth * 0.6)
+      rect.setAttribute('x', chartWidth * 0.55)
       rect.setAttribute('y', y - zoneHeight / 2)
-      rect.setAttribute('width', chartWidth * 0.4)
+      rect.setAttribute('width', chartWidth * 0.45)
       rect.setAttribute('height', zoneHeight)
       rect.setAttribute('rx', '2')
       rect.setAttribute('fill', color)
@@ -763,28 +781,29 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
       if (isPrimary) {
         const anim = document.createElementNS('http://www.w3.org/2000/svg', 'animate')
         anim.setAttribute('attributeName', 'opacity')
-        anim.setAttribute('values', `${opacity};${opacity * 2};${opacity}`)
+        anim.setAttribute('values', `${opacity};${opacity * 2.5};${opacity}`)
         anim.setAttribute('dur', '2s')
         anim.setAttribute('repeatCount', 'indefinite')
         rect.appendChild(anim)
       }
       svg.appendChild(rect)
 
-      // Dashed target line
+      // Dashed target line — spans wider for primary targets
+      const lineStart = isPrimary ? chartWidth * 0.3 : chartWidth * 0.45
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
-      line.setAttribute('x1', chartWidth * 0.4)
+      line.setAttribute('x1', lineStart)
       line.setAttribute('y1', y)
       line.setAttribute('x2', chartWidth)
       line.setAttribute('y2', y)
       line.setAttribute('stroke', color)
-      line.setAttribute('stroke-width', isPrimary ? '1.5' : '1')
-      line.setAttribute('stroke-dasharray', '6 4')
+      line.setAttribute('stroke-width', isPrimary ? '1.8' : isExtended ? '1.2' : '0.8')
+      line.setAttribute('stroke-dasharray', isPrimary ? '8 4' : '5 4')
       line.setAttribute('opacity', lineOpacity)
       svg.appendChild(line)
 
-      // Price badge on right edge
-      const badgeW = 65
-      const badgeH = 14
+      // Price badge on right edge — larger for primary
+      const badgeW = isPrimary ? 72 : 65
+      const badgeH = isPrimary ? 16 : 14
       const badgeX = chartWidth - badgeW - 4
       const badgeY = y - badgeH / 2
 
@@ -795,32 +814,50 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
       badge.setAttribute('height', badgeH)
       badge.setAttribute('rx', '3')
       badge.setAttribute('fill', color)
-      badge.setAttribute('opacity', '0.25')
+      badge.setAttribute('opacity', isPrimary ? '0.35' : '0.22')
       badge.setAttribute('stroke', color)
-      badge.setAttribute('stroke-width', '0.5')
-      badge.setAttribute('stroke-opacity', '0.5')
+      badge.setAttribute('stroke-width', isPrimary ? '1' : '0.5')
+      badge.setAttribute('stroke-opacity', isPrimary ? '0.7' : '0.4')
       svg.appendChild(badge)
 
       const priceText = document.createElementNS('http://www.w3.org/2000/svg', 'text')
       priceText.setAttribute('x', badgeX + badgeW / 2)
-      priceText.setAttribute('y', y + 3.5)
+      priceText.setAttribute('y', y + 4)
       priceText.setAttribute('text-anchor', 'middle')
-      priceText.setAttribute('fill', color)
-      priceText.setAttribute('font-size', '9')
-      priceText.setAttribute('font-weight', '700')
-      priceText.setAttribute('font-family', 'monospace')
+      priceText.setAttribute('fill', '#fff')
+      priceText.setAttribute('font-size', isPrimary ? '10' : '9')
+      priceText.setAttribute('font-weight', '800')
+      priceText.setAttribute('font-family', "'JetBrains Mono', monospace")
       priceText.textContent = parseFloat(t.price).toLocaleString('en-US', { maximumFractionDigits: 0 })
       svg.appendChild(priceText)
 
-      // Label on left side of zone
+      // Label pill with background (improved visibility) — uses adjusted Y for anti-overlap
+      const labelStr = t.label
+      const lblW = labelStr.length * 5.5 + 12
+      const lblH = 14
+      const lblX = chartWidth * 0.35
+      const lblY = labelYAdj - zoneHeight / 2 - lblH - 1
+
+      // Label background pill
+      const lblBg = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+      lblBg.setAttribute('x', lblX)
+      lblBg.setAttribute('y', lblY)
+      lblBg.setAttribute('width', lblW)
+      lblBg.setAttribute('height', lblH)
+      lblBg.setAttribute('rx', '3')
+      lblBg.setAttribute('fill', color)
+      lblBg.setAttribute('opacity', isPrimary ? '0.25' : '0.15')
+      svg.appendChild(lblBg)
+
       const labelText = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-      labelText.setAttribute('x', chartWidth * 0.42)
-      labelText.setAttribute('y', y - zoneHeight / 2 - 2)
+      labelText.setAttribute('x', lblX + 6)
+      labelText.setAttribute('y', lblY + 10)
       labelText.setAttribute('fill', color)
-      labelText.setAttribute('font-size', '7')
-      labelText.setAttribute('font-weight', '600')
-      labelText.setAttribute('opacity', '0.8')
-      labelText.textContent = t.label
+      labelText.setAttribute('font-size', isPrimary ? '9' : '8')
+      labelText.setAttribute('font-weight', '700')
+      labelText.setAttribute('font-family', "'JetBrains Mono', monospace")
+      labelText.setAttribute('opacity', isPrimary ? '1' : '0.85')
+      labelText.textContent = labelStr
       svg.appendChild(labelText)
     })
 

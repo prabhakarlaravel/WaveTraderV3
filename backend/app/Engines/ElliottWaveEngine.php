@@ -17,14 +17,29 @@ class ElliottWaveEngine implements EngineInterface
 
     private const FIB_LEVELS = [0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.618, 2.618];
 
+    /**
+     * Adaptive pivot strength per timeframe.
+     * HTF needs larger strength (fewer, more significant pivots).
+     * LTF needs smaller strength (more pivots for faster wave detection).
+     */
+    private const PIVOT_STRENGTH = [
+        '1D' => 8,
+        '4H' => 7,
+        '1H' => 6,
+        '15M' => 5,
+        '5M' => 4,
+        '1M' => 3,
+    ];
+
     public function run(array $candles, string $symbol, string $timeframe): EngineResult
     {
         if (count($candles) < 50) {
             return new EngineResult(engine: 'elliott_wave', symbol: $symbol, timeframe: $timeframe);
         }
 
-        // Step 1: Detect pivots at multiple strengths
-        $pivots = $this->detectPivots($candles, 8);
+        // Step 1: Detect pivots using adaptive strength per timeframe
+        $strength = self::PIVOT_STRENGTH[$timeframe] ?? 8;
+        $pivots = $this->detectPivots($candles, $strength);
 
         // Step 2: Build alternating swing sequence
         $swings = $this->buildSwingSequence($pivots);
@@ -429,53 +444,66 @@ class ElliottWaveEngine implements EngineInterface
             $byLabel[$w['label']] = $w;
         }
 
-        // Wave 3 target from waves 1 and 2
+        // Determine trend direction
+        $isBullish = true;
+        if (isset($byLabel['1'], $byLabel['2'])) {
+            $isBullish = $byLabel['1']['price'] > $byLabel['2']['price'];
+        }
+        $dir = $isBullish ? 1 : -1;
+
+        // Wave 3 targets from waves 1 and 2 (extensions)
         if (isset($byLabel['1'], $byLabel['2'])) {
             $w1Start = $byLabel['1']['price'];
             $w1End = $byLabel['2']['price'];
-            $w2End = $byLabel['2']['price'];
             $w1Len = abs($w1End - $w1Start);
-            $direction = $w1End > $w1Start ? 1 : -1;
 
-            $targets[] = [
-                'label' => 'Wave 3 target (1.0)',
-                'price' => round($w2End + $w1Len * 1.0 * $direction, 2),
-                'fib' => 1.0,
-                'wave' => '3',
-            ];
-            $targets[] = [
-                'label' => 'Wave 3 target (1.618)',
-                'price' => round($w2End + $w1Len * 1.618 * $direction, 2),
-                'fib' => 1.618,
-                'wave' => '3',
-            ];
-            $targets[] = [
-                'label' => 'Wave 3 target (2.618)',
-                'price' => round($w2End + $w1Len * 2.618 * $direction, 2),
-                'fib' => 2.618,
-                'wave' => '3',
-            ];
+            foreach ([1.0, 1.272, 1.618, 2.618] as $fib) {
+                $type = $fib === 1.618 ? 'primary' : ($fib === 1.0 ? 'secondary' : 'extended');
+                $targets[] = [
+                    'label' => "W3 ext ({$fib})",
+                    'price' => round($w1End + $w1Len * $fib * $dir, 2),
+                    'fib' => $fib,
+                    'wave' => '3',
+                    'type' => $type,
+                    'color' => $type === 'primary' ? '#34d399' : ($type === 'secondary' ? '#8b5cf6' : '#f59e0b'),
+                ];
+            }
         }
 
-        // Wave 5 target from waves 1-3
+        // Wave 5 targets from waves 1-3 and W4 (extensions)
         if (isset($byLabel['1'], $byLabel['4'])) {
             $w1Start = $byLabel['1']['price'];
             $w3End = isset($byLabel['3']) ? $byLabel['3']['price'] : $byLabel['4']['price'];
             $w4End = $byLabel['4']['price'];
             $w13Len = abs($w3End - $w1Start);
-            $direction = $w3End > $w1Start ? 1 : -1;
+            $w1Len = isset($byLabel['2']) ? abs($byLabel['2']['price'] - $w1Start) : $w13Len;
 
+            // W5 = 0.618 × (W1 to W3) from W4
             $targets[] = [
-                'label' => 'Wave 5 target (0.618)',
-                'price' => round($w4End + $w13Len * 0.618 * $direction, 2),
+                'label' => 'W5 = 0.618 (W1-3)',
+                'price' => round($w4End + $w13Len * 0.618 * $dir, 2),
                 'fib' => 0.618,
                 'wave' => '5',
+                'type' => 'primary',
+                'color' => '#34d399',
             ];
+            // W5 = W1 (equality) from W4
             $targets[] = [
-                'label' => 'Wave 5 target (1.0)',
-                'price' => round($w4End + $w13Len * 1.0 * $direction, 2),
+                'label' => 'W5 = W1 (1.0)',
+                'price' => round($w4End + $w1Len * 1.0 * $dir, 2),
                 'fib' => 1.0,
                 'wave' => '5',
+                'type' => 'secondary',
+                'color' => '#8b5cf6',
+            ];
+            // W5 = 1.618 × W1 (extended fifth)
+            $targets[] = [
+                'label' => 'W5 ext (1.618)',
+                'price' => round($w4End + $w1Len * 1.618 * $dir, 2),
+                'fib' => 1.618,
+                'wave' => '5',
+                'type' => 'extended',
+                'color' => '#f59e0b',
             ];
         }
 
@@ -483,15 +511,57 @@ class ElliottWaveEngine implements EngineInterface
         if (isset($byLabel['1'], $byLabel['2'])) {
             $w1Start = $byLabel['1']['price'];
             $w1End = $byLabel['2']['price'];
-            $move = $w1End - $w1Start;
+            $move = abs($w1End - $w1Start);
+            $retDir = $isBullish ? -1 : 1;
 
-            foreach ([0.382, 0.5, 0.618] as $level) {
+            foreach ([0.382, 0.5, 0.618, 0.786] as $level) {
+                $type = $level === 0.618 ? 'primary' : ($level === 0.5 ? 'secondary' : 'extended');
                 $targets[] = [
-                    'label' => "Wave 2 retracement ({$level})",
-                    'price' => round($w1End - $move * $level, 2),
+                    'label' => "W2 ret ({$level})",
+                    'price' => round($w1End + $move * $level * $retDir, 2),
                     'fib' => $level,
                     'wave' => '2',
                     'type' => 'retracement',
+                    'color' => $type === 'primary' ? '#34d399' : ($type === 'secondary' ? '#8b5cf6' : '#6b7280'),
+                ];
+            }
+        }
+
+        // Wave 4 retracement levels
+        if (isset($byLabel['3'], $byLabel['4'])) {
+            $w3Start = isset($byLabel['2']) ? $byLabel['2']['price'] : $byLabel['3']['price'];
+            $w3End = $byLabel['3']['price'];
+            $w3Len = abs($w3End - $w3Start);
+            $retDir = $isBullish ? -1 : 1;
+
+            foreach ([0.236, 0.382, 0.5] as $level) {
+                $targets[] = [
+                    'label' => "W4 ret ({$level})",
+                    'price' => round($w3End + $w3Len * $level * $retDir, 2),
+                    'fib' => $level,
+                    'wave' => '4',
+                    'type' => 'retracement',
+                    'color' => '#6b7280',
+                ];
+            }
+        }
+
+        // Correction targets (A, B, C) if impulse complete
+        if (isset($byLabel['5'])) {
+            $w1Start = $byLabel['1']['price'];
+            $w5End = $byLabel['5']['price'];
+            $impLen = abs($w5End - $w1Start);
+            $corrDir = -$dir;
+
+            foreach ([0.382, 0.5, 0.618] as $level) {
+                $type = $level === 0.5 ? 'primary' : ($level === 0.618 ? 'extended' : 'secondary');
+                $targets[] = [
+                    'label' => "Corr ({$level})",
+                    'price' => round($w5End + $impLen * $level * $corrDir, 2),
+                    'fib' => $level,
+                    'wave' => 'ABC',
+                    'type' => $type,
+                    'color' => $type === 'primary' ? '#34d399' : ($type === 'extended' ? '#f59e0b' : '#8b5cf6'),
                 ];
             }
         }

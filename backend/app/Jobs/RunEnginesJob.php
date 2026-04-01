@@ -132,12 +132,20 @@ class RunEnginesJob implements ShouldQueue, ShouldBeUnique
             ->get()
             ->toArray();
 
-        // Compute confluence score
+        // Compute confluence score with HTF bias and wave context
         $lastClose = ! empty($candles) ? (float) end($candles)['close'] : 0;
         $confluence = null;
         try {
             if ($ew && $ms && $ob && $fvg && $smc && $vwap && $pa) {
-                $confluence = (new ConfluenceEngine())->score($ew, $ms, $ob, $fvg, $smc, $vwap, $pa, $lastClose);
+                // Derive HTF bias from market structure trend for this timeframe
+                $msTrend = $ms->metadata['trend'] ?? 'neutral';
+                $htfBias = $msTrend === 'bullish' ? 'BULL' : ($msTrend === 'bearish' ? 'BEAR' : 'NEUTRAL');
+                $currentWave = $ew->metadata['current_wave'] ?? null;
+
+                $confluence = (new ConfluenceEngine())->score(
+                    $ew, $ms, $ob, $fvg, $smc, $vwap, $pa, $lastClose,
+                    $htfBias, $currentWave,
+                );
             }
         } catch (\Throwable $e) {
             Log::warning("Confluence scoring failed: {$e->getMessage()}");
@@ -177,9 +185,10 @@ class RunEnginesJob implements ShouldQueue, ShouldBeUnique
     private function cacheOverlayPayload(int $symbolId, array $payload): void
     {
         $key = "overlays:{$symbolId}:{$this->timeframe}";
-        // 300s TTL — generous safety net; cache is refreshed every 30s cycle anyway.
-        // Prevents stale reads from lasting more than 5 minutes even if fetcher stops.
-        Redis::setex($key, 300, json_encode($payload));
+        // 90s TTL — tight enough to prevent stale data, generous enough for 30s cycle gaps.
+        // Engines run every 30s, so cache should always be fresh. If fetcher stops,
+        // stale data is cleared within 90s rather than lingering for 5 minutes.
+        Redis::setex($key, 90, json_encode($payload));
     }
 
     /**

@@ -15,6 +15,10 @@ class ConfluenceEngine
      * - Levels (OB + FVG + OTE alignment): max 35 points
      * - Trigger (BOS/CHOCH + pattern):     max 30 points
      */
+    /**
+     * @param  string|null  $htfBias  HTF bias from MTF analysis ('BULL'|'BEAR'|'NEUTRAL')
+     * @param  string|null  $currentWave  Current wave label for wave-position context
+     */
     public function score(
         EngineResult $ewResult,
         EngineResult $msResult,
@@ -24,6 +28,8 @@ class ConfluenceEngine
         EngineResult $vwapResult,
         EngineResult $paResult,
         float $currentPrice,
+        ?string $htfBias = null,
+        ?string $currentWave = null,
     ): array {
         $contextScore = $this->scoreContext($ewResult, $msResult);
         $levelsScore = $this->scoreLevels($obResult, $fvgResult, $smcResult, $vwapResult, $currentPrice);
@@ -32,31 +38,75 @@ class ConfluenceEngine
         $total = $contextScore['score'] + $levelsScore['score'] + $triggerScore['score'];
         $maxTotal = 35 + 35 + 30;
 
-        // Determine direction bias
-        $bullSignals = 0;
-        $bearSignals = 0;
-        foreach ([$ewResult, $msResult, $obResult, $fvgResult, $smcResult, $paResult] as $result) {
+        // Determine direction bias — weight signals by engine importance
+        // EW and MS (structure engines) get 3× weight; OB, FVG, SMC get 2×; PA gets 1×
+        $engineWeights = [
+            'elliott_wave' => 3,
+            'market_structure' => 3,
+            'order_block' => 2,
+            'fvg' => 2,
+            'smc' => 2,
+            'price_action' => 1,
+        ];
+        $weightedBull = 0;
+        $weightedBear = 0;
+        $rawBullSignals = 0;
+        $rawBearSignals = 0;
+        $engineResults = [
+            'elliott_wave' => $ewResult,
+            'market_structure' => $msResult,
+            'order_block' => $obResult,
+            'fvg' => $fvgResult,
+            'smc' => $smcResult,
+            'price_action' => $paResult,
+        ];
+        foreach ($engineResults as $engineKey => $result) {
+            $w = $engineWeights[$engineKey] ?? 1;
             foreach ($result->signals as $signal) {
                 if (($signal['direction'] ?? '') === 'buy') {
-                    $bullSignals++;
+                    $rawBullSignals++;
+                    $weightedBull += $w;
                 }
                 if (($signal['direction'] ?? '') === 'sell') {
-                    $bearSignals++;
+                    $rawBearSignals++;
+                    $weightedBear += $w;
                 }
             }
         }
 
-        $direction = $bullSignals > $bearSignals ? 'BULL' : ($bearSignals > $bullSignals ? 'BEAR' : 'NEUTRAL');
+        $direction = $weightedBull > $weightedBear ? 'BULL' : ($weightedBear > $weightedBull ? 'BEAR' : 'NEUTRAL');
 
-        // Action recommendation
-        $action = $this->determineAction($total, $direction, $contextScore, $levelsScore, $triggerScore);
+        // HTF Bias Gate: if HTF bias contradicts signal direction, cap confidence and flag conflict
+        $conflict = false;
+        $conflictNote = null;
+        if ($htfBias && $htfBias !== 'NEUTRAL' && $direction !== 'NEUTRAL' && $htfBias !== $direction) {
+            $conflict = true;
+            $conflictNote = "HTF bias ({$htfBias}) conflicts with signal ({$direction})";
+            // Reduce total score by 25% for conflict
+            $total = (int) round($total * 0.75);
+        }
+
+        // Wave-position context: after correction end (wave C), bias toward reversal
+        $waveContext = null;
+        $cw = $currentWave ?? ($ewResult->metadata['current_wave'] ?? null);
+        if ($cw === 'C' || $cw === '5') {
+            $waveContext = $cw === 'C' ? 'correction_ending' : 'impulse_ending';
+        }
+
+        // Action recommendation — now considers HTF conflict and wave position
+        $action = $this->determineAction($total, $direction, $contextScore, $levelsScore, $triggerScore, $conflict, $htfBias, $waveContext);
+
+        $pct = $maxTotal > 0 ? round($total / $maxTotal * 100) : 0;
 
         return [
             'total_score' => $total,
             'max_score' => $maxTotal,
-            'pct' => $maxTotal > 0 ? round($total / $maxTotal * 100) : 0,
+            'pct' => $pct,
             'direction' => $direction,
             'action' => $action,
+            'conflict' => $conflict,
+            'conflictNote' => $conflictNote,
+            'waveContext' => $waveContext,
             'breakdown' => [
                 'context' => [
                     'score' => $contextScore['score'],
@@ -80,8 +130,10 @@ class ConfluenceEngine
                     'details' => $triggerScore['details'],
                 ],
             ],
-            'bull_signals' => $bullSignals,
-            'bear_signals' => $bearSignals,
+            'bull_signals' => $rawBullSignals,
+            'bear_signals' => $rawBearSignals,
+            'weighted_bull' => $weightedBull,
+            'weighted_bear' => $weightedBear,
         ];
     }
 
@@ -266,8 +318,33 @@ class ConfluenceEngine
         return ['score' => min(30, $score), 'desc' => $desc, 'details' => $details];
     }
 
-    private function determineAction(int $total, string $direction, array $context, array $levels, array $trigger): string
-    {
+    private function determineAction(
+        int $total,
+        string $direction,
+        array $context,
+        array $levels,
+        array $trigger,
+        bool $conflict = false,
+        ?string $htfBias = null,
+        ?string $waveContext = null,
+    ): string {
+        // If HTF conflicts with signal direction, never say "STRONG" — cap at counter-trend action
+        if ($conflict) {
+            $htfLabel = $htfBias === 'BULL' ? 'BULLISH' : 'BEARISH';
+            if ($total >= 60 && $trigger['score'] >= 15) {
+                return "COUNTER-TREND {$direction} (HTF {$htfLabel})";
+            }
+            return "CONFLICTING — HTF {$htfLabel}";
+        }
+
+        // Wave position context adjustments
+        if ($waveContext === 'correction_ending' && $total >= 50) {
+            return $direction === 'BULL' ? 'BUY — CORRECTION ENDING' : ($direction === 'BEAR' ? 'SELL — CORRECTION ENDING' : 'WAIT');
+        }
+        if ($waveContext === 'impulse_ending' && $total >= 50) {
+            return $direction === 'BULL' ? 'CAUTION — IMPULSE ENDING' : ($direction === 'BEAR' ? 'CAUTION — IMPULSE ENDING' : 'WAIT');
+        }
+
         if ($total >= 80) {
             return $direction === 'BULL' ? 'STRONG BUY' : ($direction === 'BEAR' ? 'STRONG SELL' : 'WAIT');
         }
