@@ -4,16 +4,51 @@ declare(strict_types=1);
 
 namespace App\Engines;
 
+/**
+ * ConfluenceEngine v3.2 — Single source of truth for direction + confidence.
+ *
+ * Layers implemented:
+ *   L1: Bug fixes — weighted direction instead of raw signal count
+ *   L2: HTF conflict gate — penalizes when HTF disagrees with signal direction
+ *   L3: Tiered engine + timeframe weighting
+ *   L4: Minimum conditions gate — show WAIT when evidence is weak
+ *   L5: Dynamic confidence adjustments (±modifiers, capped 30-85%)
+ *   L6: Time decay + staleness (applied by frontend using computed_at)
+ *
+ * Scoring weights (unchanged):
+ *   Context (HTF wave position):       max 35 points
+ *   Levels  (OB + FVG + OTE + VWAP):   max 35 points
+ *   Trigger (BOS/CHOCH + pattern):      max 30 points
+ *
+ * New outputs:
+ *   - callPut: 'BUY CALL' | 'BUY PUT' | 'HEDGE CALL' | 'HEDGE PUT' | 'WAIT'
+ *   - adjustedPct: final confidence after all adjustments (30-85 cap)
+ *   - conflict: bool — true when HTF trend opposes signal direction
+ *   - conflictNote: string explaining the conflict
+ *   - htfBias: 'BULL' | 'BEAR' | 'NEUTRAL' — passed through for frontend
+ *   - gateResult: which minimum conditions passed/failed
+ */
 class ConfluenceEngine
 {
     /**
-     * Score confluence across all engine results for a given price level.
-     * Returns 0-100 composite score with breakdown.
+     * Engine weights for direction voting (Layer 3).
+     * Higher weight = more influence on BULL/BEAR direction.
+     */
+    private const ENGINE_WEIGHTS = [
+        'elliott_wave'     => 3.0,
+        'market_structure'  => 3.0,
+        'order_block'      => 2.0,
+        'fvg'              => 1.5,
+        'smc'              => 2.0,
+        'vwap'             => 1.0,
+        'price_action'     => 1.0,
+    ];
+
+    /**
+     * Score confluence across all engine results.
      *
-     * Scoring weights:
-     * - Context (HTF wave position):      max 35 points
-     * - Levels (OB + FVG + OTE alignment): max 35 points
-     * - Trigger (BOS/CHOCH + pattern):     max 30 points
+     * @param  string  $htfBias   'BULL'|'BEAR'|'NEUTRAL' — from MTF analysis (1D+4H+1H trends)
+     * @param  string  $timeframe Active timeframe being analyzed
      */
     public function score(
         EngineResult $ewResult,
@@ -24,39 +59,175 @@ class ConfluenceEngine
         EngineResult $vwapResult,
         EngineResult $paResult,
         float $currentPrice,
+        string $htfBias = 'NEUTRAL',
+        string $timeframe = '5M',
     ): array {
+        // ── Phase 1: Compute sub-scores (unchanged logic) ──
         $contextScore = $this->scoreContext($ewResult, $msResult);
         $levelsScore = $this->scoreLevels($obResult, $fvgResult, $smcResult, $vwapResult, $currentPrice);
         $triggerScore = $this->scoreTrigger($msResult, $paResult);
 
         $total = $contextScore['score'] + $levelsScore['score'] + $triggerScore['score'];
-        $maxTotal = 35 + 35 + 30;
+        $maxTotal = 35 + 35 + 30; // 100
 
-        // Determine direction bias
-        $bullSignals = 0;
-        $bearSignals = 0;
-        foreach ([$ewResult, $msResult, $obResult, $fvgResult, $smcResult, $paResult] as $result) {
+        // ── Phase 2: Weighted direction (Layer 3) ──
+        $engineResults = [
+            'elliott_wave'     => $ewResult,
+            'market_structure' => $msResult,
+            'order_block'      => $obResult,
+            'fvg'              => $fvgResult,
+            'smc'              => $smcResult,
+            'vwap'             => $vwapResult,
+            'price_action'     => $paResult,
+        ];
+
+        $weightedBull = 0.0;
+        $weightedBear = 0.0;
+        $rawBullCount = 0;
+        $rawBearCount = 0;
+        $agreeingEngines = 0; // how many engines have at least 1 directional signal
+
+        foreach ($engineResults as $engineKey => $result) {
+            $engineWeight = self::ENGINE_WEIGHTS[$engineKey] ?? 1.0;
+            $engineBull = 0;
+            $engineBear = 0;
+
             foreach ($result->signals as $signal) {
-                if (($signal['direction'] ?? '') === 'buy') {
-                    $bullSignals++;
+                $dir = $signal['direction'] ?? '';
+                if ($dir === 'buy') {
+                    $engineBull++;
+                    $rawBullCount++;
                 }
-                if (($signal['direction'] ?? '') === 'sell') {
-                    $bearSignals++;
+                if ($dir === 'sell') {
+                    $engineBear++;
+                    $rawBearCount++;
                 }
+            }
+
+            // Each engine votes once (net direction) with its weight
+            if ($engineBull > $engineBear) {
+                $weightedBull += $engineWeight;
+                $agreeingEngines++;
+            } elseif ($engineBear > $engineBull) {
+                $weightedBear += $engineWeight;
+                $agreeingEngines++;
             }
         }
 
-        $direction = $bullSignals > $bearSignals ? 'BULL' : ($bearSignals > $bullSignals ? 'BEAR' : 'NEUTRAL');
+        $direction = 'NEUTRAL';
+        if ($weightedBull > $weightedBear) {
+            $direction = 'BULL';
+        } elseif ($weightedBear > $weightedBull) {
+            $direction = 'BEAR';
+        }
 
-        // Action recommendation
-        $action = $this->determineAction($total, $direction, $contextScore, $levelsScore, $triggerScore);
+        // ── Phase 3: HTF Conflict Gate (Layer 2) ──
+        $conflict = false;
+        $conflictNote = '';
+
+        if ($htfBias !== 'NEUTRAL' && $direction !== 'NEUTRAL' && $htfBias !== $direction) {
+            $conflict = true;
+            $conflictNote = "HTF bias ({$htfBias}) conflicts with signal ({$direction})";
+        }
+
+        // ── Phase 4: Minimum Conditions Gate (Layer 4) ──
+        $gateChecks = [
+            'context_ok' => $contextScore['score'] >= 20,        // EW health + wave + trend
+            'levels_ok' => $levelsScore['score'] >= 15,          // OB/FVG/OTE near price
+            'trigger_ok' => $triggerScore['score'] >= 10,        // BOS/CHOCH confirmed
+            'engines_agree' => $agreeingEngines >= 2,            // At least 2 engines agree
+            'wave_health_ok' => ($ewResult->metadata['health_score'] ?? 0) >= 50,
+        ];
+
+        $gatesPassed = count(array_filter($gateChecks));
+        $gateTotalRequired = 3; // need at least 3 of 5 gates to show directional signal
+        $gatesOk = $gatesPassed >= $gateTotalRequired;
+
+        // ── Phase 5: Dynamic Confidence Adjustments (Layer 5) ──
+        $basePct = $maxTotal > 0 ? round($total / $maxTotal * 100) : 0;
+        $adjustments = [];
+        $adjustedPct = (float) $basePct;
+
+        // +10 if HTF aligned with signal
+        if ($htfBias !== 'NEUTRAL' && $htfBias === $direction) {
+            $adjustedPct += 10;
+            $adjustments[] = 'HTF aligned (+10%)';
+        }
+
+        // -25 if HTF conflicts with signal
+        if ($conflict) {
+            $adjustedPct -= 25;
+            $adjustments[] = 'HTF conflict (-25%)';
+        }
+
+        // +8 if all 3 level types present (OB + FVG + OTE)
+        $hasOb = ! empty(array_filter($obResult->overlays['orderBlocks'] ?? [], fn ($b) => ($b['status'] ?? '') === 'fresh'));
+        $hasFvg = ! empty(array_filter($fvgResult->overlays['fvgs'] ?? [], fn ($f) => ($f['fill_pct'] ?? 100) < 50));
+        $hasOte = ! empty($smcResult->overlays['oteZones'] ?? []);
+        if ($hasOb && $hasFvg && $hasOte) {
+            $adjustedPct += 8;
+            $adjustments[] = 'Triple confluence OB+FVG+OTE (+8%)';
+        }
+
+        // +5 if CHOCH confirmed (not just BOS)
+        $bos = $msResult->overlays['bos'] ?? [];
+        $recentBos = array_slice($bos, -3);
+        $hasChoch = false;
+        foreach ($recentBos as $b) {
+            if (($b['type'] ?? '') === 'choch') {
+                $hasChoch = true;
+            }
+        }
+        if ($hasChoch) {
+            $adjustedPct += 5;
+            $adjustments[] = 'CHOCH confirmed (+5%)';
+        }
+
+        // -15 if wave health < 50
+        $waveHealth = $ewResult->metadata['health_score'] ?? 0;
+        if ($waveHealth < 50) {
+            $adjustedPct -= 15;
+            $adjustments[] = "Low EW health {$waveHealth}/100 (-15%)";
+        }
+
+        // -20 if only 1 engine agrees
+        if ($agreeingEngines <= 1) {
+            $adjustedPct -= 20;
+            $adjustments[] = "Only {$agreeingEngines} engine agrees (-20%)";
+        }
+
+        // +10 if 4+ engines agree
+        if ($agreeingEngines >= 4) {
+            $adjustedPct += 10;
+            $adjustments[] = "{$agreeingEngines} engines agree (+10%)";
+        }
+
+        // -10 if in late cycle (wave 5 or C)
+        $currentWave = $ewResult->metadata['current_wave'] ?? null;
+        if (in_array($currentWave, ['5', 'C'], true)) {
+            $adjustedPct -= 10;
+            $adjustments[] = "Late cycle wave {$currentWave} (-10%)";
+        }
+
+        // Cap: 30% floor, 85% ceiling
+        $adjustedPct = max(30, min(85, (int) round($adjustedPct)));
+
+        // ── Phase 6: Call/Put + Action determination ──
+        $callPut = $this->determineCallPut($direction, $htfBias, $adjustedPct, $gatesOk, $conflict);
+        $action = $this->determineAction($total, $direction, $contextScore, $levelsScore, $triggerScore, $gatesOk, $conflict, $htfBias);
 
         return [
             'total_score' => $total,
             'max_score' => $maxTotal,
-            'pct' => $maxTotal > 0 ? round($total / $maxTotal * 100) : 0,
+            'pct' => (int) $basePct,
+            'adjustedPct' => $adjustedPct,
             'direction' => $direction,
+            'callPut' => $callPut,
             'action' => $action,
+            'conflict' => $conflict,
+            'conflictNote' => $conflictNote,
+            'htfBias' => $htfBias,
+            'adjustments' => $adjustments,
             'breakdown' => [
                 'context' => [
                     'score' => $contextScore['score'],
@@ -80,9 +251,112 @@ class ConfluenceEngine
                     'details' => $triggerScore['details'],
                 ],
             ],
-            'bull_signals' => $bullSignals,
-            'bear_signals' => $bearSignals,
+            'gates' => $gateChecks,
+            'gatesPassed' => $gatesPassed,
+            'gatesOk' => $gatesOk,
+            'bull_signals' => $rawBullCount,
+            'bear_signals' => $rawBearCount,
+            'weighted_bull' => round($weightedBull, 2),
+            'weighted_bear' => round($weightedBear, 2),
+            'engines_agreeing' => $agreeingEngines,
         ];
+    }
+
+    /**
+     * Determine BUY CALL / BUY PUT / HEDGE / WAIT recommendation.
+     * This is the SINGLE source of truth — frontend must NOT recalculate.
+     */
+    private function determineCallPut(
+        string $direction,
+        string $htfBias,
+        int $adjustedPct,
+        bool $gatesOk,
+        bool $conflict,
+    ): string {
+        // Gate check: if minimum conditions not met, always WAIT
+        if (! $gatesOk) {
+            return 'WAIT';
+        }
+
+        // Below 30% confidence: WAIT
+        if ($adjustedPct < 35) {
+            return 'WAIT';
+        }
+
+        // Conflict scenarios: recommend HEDGE (reduced conviction)
+        if ($conflict) {
+            // HTF BULL but signal BEAR → small pullback in uptrend
+            if ($htfBias === 'BULL' && $direction === 'BEAR') {
+                return $adjustedPct >= 55 ? 'HEDGE PUT' : 'WAIT';
+            }
+            // HTF BEAR but signal BULL → bounce in downtrend
+            if ($htfBias === 'BEAR' && $direction === 'BULL') {
+                return $adjustedPct >= 55 ? 'HEDGE CALL' : 'WAIT';
+            }
+        }
+
+        // Aligned scenarios: full conviction
+        if ($direction === 'BULL') {
+            return $adjustedPct >= 60 ? 'BUY CALL' : ($adjustedPct >= 45 ? 'HEDGE CALL' : 'WAIT');
+        }
+
+        if ($direction === 'BEAR') {
+            return $adjustedPct >= 60 ? 'BUY PUT' : ($adjustedPct >= 45 ? 'HEDGE PUT' : 'WAIT');
+        }
+
+        return 'WAIT';
+    }
+
+    /**
+     * Action recommendation for the bottom card.
+     * Now unified with confluence direction + HTF bias.
+     */
+    private function determineAction(
+        int $total,
+        string $direction,
+        array $context,
+        array $levels,
+        array $trigger,
+        bool $gatesOk,
+        bool $conflict,
+        string $htfBias,
+    ): string {
+        // If gates not met, no action
+        if (! $gatesOk) {
+            if ($trigger['score'] < 10) {
+                return 'WAIT FOR BOS';
+            }
+            if ($context['score'] < 20) {
+                return 'WAIT FOR CONTEXT';
+            }
+
+            return 'NO TRADE';
+        }
+
+        // If HTF conflicts, reduce action strength
+        if ($conflict) {
+            if ($total >= 70) {
+                return $direction === 'BULL' ? 'HEDGE BUY' : 'HEDGE SELL';
+            }
+
+            return 'WAIT — HTF CONFLICT';
+        }
+
+        // Normal action determination
+        if ($total >= 80) {
+            return $direction === 'BULL' ? 'STRONG BUY' : ($direction === 'BEAR' ? 'STRONG SELL' : 'WAIT');
+        }
+        if ($total >= 60 && $trigger['score'] >= 15) {
+            return $direction === 'BULL' ? 'BUY ON OB RETEST' : ($direction === 'BEAR' ? 'SELL ON OB RETEST' : 'WAIT');
+        }
+        if ($total >= 40 && $context['score'] >= 20) {
+            return 'WAIT FOR TRIGGER';
+        }
+        if ($trigger['score'] < 10) {
+            return 'WAIT FOR BOS';
+        }
+
+        return 'NO TRADE';
     }
 
     /**
@@ -104,8 +378,8 @@ class ConfluenceEngine
         if ($currentWave) {
             $wavePoints = match ($currentWave) {
                 '3' => 10,    // Wave 3 = strongest trend
-                '5' => 7,     // Wave 5 = late trend
                 '1' => 8,     // Wave 1 = trend start
+                '5' => 7,     // Wave 5 = late trend
                 'C' => 6,     // Wave C = correction ending
                 '2', '4' => 5, // Corrective = pullback opportunity
                 'A', 'B' => 3,
@@ -122,7 +396,6 @@ class ConfluenceEngine
         $score += $trendPoints;
         $details[] = "Trend: {$trend}, {$bosCount} BOS (+{$trendPoints})";
 
-        $phase = $ew->metadata['phase'] ?? 'unknown';
         $degree = $ew->metadata['degree'] ?? '';
         $desc = $currentWave
             ? "{$degree} wave {$currentWave}"
@@ -142,7 +415,7 @@ class ConfluenceEngine
         // Fresh Order Blocks near price (0-10 points)
         $freshObs = 0;
         foreach ($ob->overlays['orderBlocks'] ?? [] as $block) {
-            if ($block['status'] === 'fresh') {
+            if (($block['status'] ?? '') === 'fresh') {
                 $obMid = ($block['high'] + $block['low']) / 2;
                 $dist = abs($price - $obMid) / $price * 100;
                 if ($dist < 2) {
@@ -201,10 +474,6 @@ class ConfluenceEngine
             }
         }
 
-        // Premium/discount zone
-        $pd = $smc->overlays['premiumDiscount'] ?? [];
-        $zone = $pd['currentZone'] ?? 'equilibrium';
-
         $desc = collect(array_filter([
             $freshObs > 0 ? 'OB' : null,
             $nearFvg > 0 ? 'FVG' : null,
@@ -225,11 +494,11 @@ class ConfluenceEngine
         // Recent BOS/CHOCH (0-15 points)
         $bos = $ms->overlays['bos'] ?? [];
         $recentBos = array_slice($bos, -3);
+        $hasChoch = false;
+
         if (! empty($recentBos)) {
-            $lastBos = end($recentBos);
-            $hasChoch = false;
             foreach ($recentBos as $b) {
-                if ($b['type'] === 'choch') {
+                if (($b['type'] ?? '') === 'choch') {
                     $hasChoch = true;
                 }
             }
@@ -261,26 +530,8 @@ class ConfluenceEngine
             $details[] = 'No trigger pattern';
         }
 
-        $desc = empty($recentBos) ? 'Wait BOS' : (isset($hasChoch) && $hasChoch ? 'CHOCH + pattern' : 'BOS confirmed');
+        $desc = empty($recentBos) ? 'Wait BOS' : ($hasChoch ? 'CHOCH + pattern' : 'BOS confirmed');
 
         return ['score' => min(30, $score), 'desc' => $desc, 'details' => $details];
-    }
-
-    private function determineAction(int $total, string $direction, array $context, array $levels, array $trigger): string
-    {
-        if ($total >= 80) {
-            return $direction === 'BULL' ? 'STRONG BUY' : ($direction === 'BEAR' ? 'STRONG SELL' : 'WAIT');
-        }
-        if ($total >= 60 && $trigger['score'] >= 15) {
-            return $direction === 'BULL' ? 'BUY ON OB RETEST' : ($direction === 'BEAR' ? 'SELL ON OB RETEST' : 'WAIT');
-        }
-        if ($total >= 40 && $context['score'] >= 20) {
-            return 'WAIT FOR TRIGGER';
-        }
-        if ($trigger['score'] < 10) {
-            return 'WAIT FOR BOS';
-        }
-
-        return 'NO TRADE';
     }
 }

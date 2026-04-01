@@ -229,6 +229,7 @@ class ChartController extends Controller
     {
         $request->validate([
             'symbol_id' => 'required|exists:symbols,id',
+            'timeframe' => 'nullable|string|in:1M,5M,15M,1H,4H,1D',
         ]);
 
         $symbol = Symbol::findOrFail($request->symbol_id);
@@ -313,10 +314,14 @@ class ChartController extends Controller
         $alignment = max($bullCount, $bearCount);
         $htfBias = $bullCount > $bearCount ? 'BULL' : ($bearCount > $bullCount ? 'BEAR' : 'NEUTRAL');
 
-        // Trend progress: estimate how far through the current wave cycle
-        // Based on the highest TF's wave position
-        $htfWave = $tfData['1D']['wave'] ?? $tfData['4H']['wave'] ?? null;
-        $trendProgress = $this->estimateTrendProgress($htfWave);
+        // Trend progress: dynamic calculation using price position within wave range
+        $htfTf = ($tfData['1D']['wave'] ?? null) ? '1D' : (($tfData['4H']['wave'] ?? null) ? '4H' : null);
+        $htfRow = $htfTf ? $tfData[$htfTf] : null;
+        $trendProgress = $this->estimateTrendProgress($htfRow);
+
+        // Compute confluence for the response (single source of truth for frontend)
+        $activeTfCached = RunEnginesJob::getCachedOverlays($symbol->id, $request->query('timeframe', '5M'));
+        $confluence = $activeTfCached['confluence'] ?? null;
 
         return response()->json([
             'symbol' => $symbol->ticker,
@@ -325,23 +330,144 @@ class ChartController extends Controller
             'alignment' => $alignment . '/' . $totalTfs,
             'alignmentPct' => $totalTfs > 0 ? round($alignment / $totalTfs * 100) : 0,
             'trendProgress' => $trendProgress,
+            'confluence' => $confluence,
         ]);
     }
 
-    private function estimateTrendProgress(?string $wave): array
+    /**
+     * Estimate trend progress using ACTUAL price position within the wave range.
+     * Each wave has a base % range; we interpolate within that range using price.
+     *
+     * Wave cycle:  1(0-12%) → 2(12-22%) → 3(22-55%) → 4(55-65%) → 5(65-80%) → A(80-87%) → B(87-93%) → C(93-100%)
+     *
+     * @param  array|null  $htfRow  The HTF timeframe row with wave, waveLabels, etc.
+     */
+    private function estimateTrendProgress(?array $htfRow): array
     {
-        $progressMap = [
-            '1' => ['pct' => 15, 'label' => 'JUST STARTED', 'stage' => 'start'],
-            '2' => ['pct' => 25, 'label' => 'EARLY', 'stage' => 'start'],
-            '3' => ['pct' => 50, 'label' => 'MIDDLE', 'stage' => 'middle'],
-            '4' => ['pct' => 65, 'label' => 'PAST MIDDLE', 'stage' => 'middle'],
-            '5' => ['pct' => 85, 'label' => 'NEAR END', 'stage' => 'end'],
-            'A' => ['pct' => 40, 'label' => 'CORRECTION START', 'stage' => 'start'],
-            'B' => ['pct' => 60, 'label' => 'CORRECTION MIDDLE', 'stage' => 'middle'],
-            'C' => ['pct' => 85, 'label' => 'CORRECTION END', 'stage' => 'end'],
+        if (! $htfRow || empty($htfRow['wave'])) {
+            return ['pct' => 50, 'label' => 'ANALYZING', 'stage' => 'middle'];
+        }
+
+        $wave = $htfRow['wave'];
+        $labels = $htfRow['waveLabels'] ?? [];
+
+        // Base range for each wave position in the full cycle
+        $waveRanges = [
+            '1' => ['min' => 0,  'max' => 12, 'label' => 'IMPULSE START',     'stage' => 'start'],
+            '2' => ['min' => 12, 'max' => 22, 'label' => 'EARLY PULLBACK',    'stage' => 'start'],
+            '3' => ['min' => 22, 'max' => 55, 'label' => 'IMPULSE MIDDLE',    'stage' => 'middle'],
+            '4' => ['min' => 55, 'max' => 65, 'label' => 'LATE PULLBACK',     'stage' => 'middle'],
+            '5' => ['min' => 65, 'max' => 80, 'label' => 'IMPULSE END',       'stage' => 'end'],
+            'A' => ['min' => 80, 'max' => 87, 'label' => 'CORRECTION START',  'stage' => 'start'],
+            'B' => ['min' => 87, 'max' => 93, 'label' => 'CORRECTION MIDDLE', 'stage' => 'middle'],
+            'C' => ['min' => 93, 'max' => 100,'label' => 'CORRECTION END',    'stage' => 'end'],
         ];
 
-        return $progressMap[$wave] ?? ['pct' => 50, 'label' => 'UNKNOWN', 'stage' => 'middle'];
+        $range = $waveRanges[$wave] ?? null;
+        if (! $range) {
+            return ['pct' => 50, 'label' => 'ANALYZING', 'stage' => 'middle'];
+        }
+
+        // Try to calculate intra-wave progress using price position
+        $intraProgress = 0.5; // default: midpoint of the wave range
+        if (count($labels) >= 2) {
+            $intraProgress = $this->calculateIntraWaveProgress($wave, $labels);
+        }
+
+        // Interpolate within the wave's % range
+        $pct = (int) round($range['min'] + ($range['max'] - $range['min']) * $intraProgress);
+        $pct = max($range['min'], min($range['max'], $pct));
+
+        return [
+            'pct' => $pct,
+            'label' => $range['label'],
+            'stage' => $range['stage'],
+        ];
+    }
+
+    /**
+     * Calculate how far price has traveled within the current wave (0.0 to 1.0).
+     * Uses the wave start price and Fibonacci extension/retracement targets.
+     */
+    private function calculateIntraWaveProgress(string $wave, array $labels): float
+    {
+        if (empty($labels)) {
+            return 0.5;
+        }
+
+        // Find the current wave's start label and the previous wave's label
+        $currentLabel = null;
+        $prevLabel = null;
+        for ($i = count($labels) - 1; $i >= 0; $i--) {
+            if ($labels[$i]['label'] === $wave) {
+                $currentLabel = $labels[$i];
+                if ($i > 0) {
+                    $prevLabel = $labels[$i - 1];
+                }
+                break;
+            }
+        }
+
+        // If we can't find the wave labels, use last label as current price proxy
+        if (! $currentLabel && ! empty($labels)) {
+            $currentLabel = end($labels);
+            $prevLabel = count($labels) > 1 ? $labels[count($labels) - 2] : null;
+        }
+
+        if (! $prevLabel || ! $currentLabel) {
+            return 0.5;
+        }
+
+        $startPrice = (float) $prevLabel['price'];
+        $currentPrice = (float) $currentLabel['price'];
+
+        // Estimate expected wave target based on Elliott Wave rules
+        $expectedMove = $this->estimateWaveTarget($wave, $labels);
+        if ($expectedMove <= 0) {
+            return 0.5;
+        }
+
+        $actualMove = abs($currentPrice - $startPrice);
+        $progress = min(1.0, $actualMove / $expectedMove);
+
+        return $progress;
+    }
+
+    /**
+     * Estimate the expected price move for a wave based on typical Fibonacci ratios.
+     */
+    private function estimateWaveTarget(string $wave, array $labels): float
+    {
+        // Find wave 1 length as base reference (if available)
+        $wave1Start = null;
+        $wave1End = null;
+        foreach ($labels as $l) {
+            if ($l['label'] === '1') {
+                $wave1End = (float) $l['price'];
+            }
+        }
+        // Wave 1 start is the label before wave 1
+        for ($i = 0; $i < count($labels); $i++) {
+            if ($labels[$i]['label'] === '1' && $i > 0) {
+                $wave1Start = (float) $labels[$i - 1]['price'];
+                break;
+            }
+        }
+
+        $wave1Length = ($wave1Start && $wave1End) ? abs($wave1End - $wave1Start) : 0;
+
+        // Use typical Fibonacci ratios for each wave
+        return match ($wave) {
+            '1' => $wave1Length > 0 ? $wave1Length : 100,              // self-reference: use actual
+            '2' => $wave1Length * 0.618,                               // retraces 50-61.8% of W1
+            '3' => $wave1Length * 1.618,                               // extends 161.8% of W1
+            '4' => $wave1Length * 0.382,                               // retraces 38.2% of W3
+            '5' => $wave1Length * 1.0,                                 // equals W1
+            'A' => $wave1Length * 0.618,                               // 61.8% of impulse
+            'B' => $wave1Length * 0.382,                               // 38.2% retrace of A
+            'C' => $wave1Length * 1.0,                                 // equals A typically
+            default => $wave1Length > 0 ? $wave1Length : 100,
+        };
     }
 
     public function symbols(): JsonResponse

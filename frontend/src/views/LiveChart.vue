@@ -47,48 +47,16 @@ const overlayConfig = [
   { key: 'vwap', label: 'VWAP', color: '#ec4899' },
 ]
 
-// Wave Matrix — populated from overlays API
-const waveMatrix = ref([])
-const expandedWave = ref(null)
+/**
+ * Confluence — single source of truth from backend ConfluenceEngine v3.2.
+ * All bottom cards and the Wave Matrix panel read from this.
+ */
 const confluence = ref(null)
 
-// Build wave matrix from overlay metadata
-function updateWaveMatrix() {
+function updateConfluence() {
   const o = chartStore.overlays
-  if (!o) return
-
-  const ewMeta = o.metadata?.elliott_wave || {}
-  const currentWave = ewMeta.current_wave || '?'
-  const degree = ewMeta.degree || 'Minor'
-  const health = ewMeta.health_score || 0
-  const phase = ewMeta.phase || 'IMPULSE'
-  const trend = o.metadata?.trend || 'neutral'
-  const dir = trend === 'bullish' ? 'BULL' : trend === 'bearish' ? 'BEAR' : 'NEUTRAL'
-
-  // Build from current TF data
-  const tf = chartStore.activeTimeframe
-  const corrLabels = ['A', 'B', 'C']
-  const isCorr = corrLabels.includes(currentWave)
-
-  waveMatrix.value = [
-    { tf, wave: currentWave, of: '', degree, phase: isCorr ? 'CORRECTION' : 'IMPULSE', dir, pct: Math.min(95, health), target: '--', conf: health, note: `Wave ${currentWave} — ${degree} degree` },
-  ]
-
-  // Add other timeframes from the wave labels if available
-  const labels = o.waveLabels || []
-  if (labels.length > 0) {
-    const last = labels[labels.length - 1]
-    const secondLast = labels.length > 1 ? labels[labels.length - 2] : null
-    waveMatrix.value[0].note = `${last.degree || degree} wave ${last.label} — ${last.phase || phase}`
-    if (secondLast) {
-      waveMatrix.value[0].of = secondLast.label
-    }
-  }
-
-  // Set confluence data
-  if (o.confluence) {
-    confluence.value = o.confluence
-  }
+  if (!o?.confluence) return
+  confluence.value = o.confluence
 }
 
 const lastPrice = ref({ price: 0, change: 0, bull: true })
@@ -110,15 +78,15 @@ function updatePrice() {
   document.title = `${ticker} ${formatted} (${sign}${change.toFixed(2)}%) — WaveTrader`
 }
 
-const htfDir = computed(() => {
-  const bulls = waveMatrix.value.slice(0, 3).filter(w => w.dir === 'BULL').length
-  return bulls >= 2 ? 'BULL' : 'BEAR'
-})
-const ltfDir = computed(() => {
-  const bulls = waveMatrix.value.slice(3).filter(w => w.dir === 'BULL').length
-  return bulls >= 2 ? 'BULL' : 'BEAR'
-})
-const aligned = computed(() => htfDir.value === ltfDir.value)
+/**
+ * HTF/LTF direction — derived from backend confluence (single source of truth).
+ * htfBias comes from ConfluenceEngine which reads cached 1D+4H+1H trends.
+ * Signal direction is the weighted engine consensus.
+ */
+const htfDir = computed(() => confluence.value?.htfBias || 'NEUTRAL')
+const signalDir = computed(() => confluence.value?.direction || 'NEUTRAL')
+const conflict = computed(() => confluence.value?.conflict || false)
+const aligned = computed(() => !conflict.value && htfDir.value !== 'NEUTRAL')
 
 function initChart() {
   if (!chartContainer.value) return
@@ -205,7 +173,7 @@ function updateChartData() {
     lastSetDataLength = candles.length
   }
   updatePrice()
-  updateWaveMatrix()
+  updateConfluence()
 }
 
 // Pause sync timer when tab is hidden to save CPU
@@ -327,30 +295,30 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
       <div class="chart-col">
         <div ref="chartContainer" class="chart-container"></div>
 
-        <!-- Bias strip below chart -->
+        <!-- Bias strip below chart — unified with backend ConfluenceEngine v3.2 -->
         <div class="bias-strip">
-          <div :class="['bias-card', htfDir === 'BULL' ? 'bull' : 'bear']">
-            <span class="bias-arrow" :style="{ transform: htfDir === 'BULL' ? 'rotate(-45deg)' : 'rotate(45deg)' }">→</span>
+          <div :class="['bias-card', htfDir === 'BULL' ? 'bull' : htfDir === 'BEAR' ? 'bear' : 'warn']">
+            <span class="bias-arrow" :style="{ transform: htfDir === 'BULL' ? 'rotate(-45deg)' : htfDir === 'BEAR' ? 'rotate(45deg)' : '' }">→</span>
             <div>
               <div class="bias-label">HTF bias (1D · 4H · 1H)</div>
-              <div class="bias-value" :style="{ color: htfDir === 'BULL' ? 'var(--bull)' : 'var(--bear)' }">
-                {{ htfDir === 'BULL' ? 'BULLISH — look for LONGS' : 'BEARISH — look for SHORTS' }}
+              <div class="bias-value" :style="{ color: htfDir === 'BULL' ? 'var(--bull)' : htfDir === 'BEAR' ? 'var(--bear)' : 'var(--dim)' }">
+                {{ htfDir === 'BULL' ? 'BULLISH — look for LONGS' : htfDir === 'BEAR' ? 'BEARISH — look for SHORTS' : 'NEUTRAL — no bias' }}
               </div>
             </div>
           </div>
-          <div :class="['bias-card', ltfDir === 'BULL' ? 'bull' : 'bear']">
-            <span class="bias-arrow" :style="{ transform: ltfDir === 'BULL' ? 'rotate(-45deg)' : 'rotate(45deg)' }">→</span>
+          <div :class="['bias-card', signalDir === 'BULL' ? 'bull' : signalDir === 'BEAR' ? 'bear' : 'warn']">
+            <span class="bias-arrow" :style="{ transform: signalDir === 'BULL' ? 'rotate(-45deg)' : signalDir === 'BEAR' ? 'rotate(45deg)' : '' }">→</span>
             <div>
-              <div class="bias-label">LTF state (15m · 5m · 1m)</div>
-              <div class="bias-value" :style="{ color: ltfDir === 'BULL' ? 'var(--bull)' : 'var(--bear)' }">
-                {{ ltfDir === 'BULL' ? 'BULLISH' : 'BEARISH' }} — {{ aligned ? '✓ aligned with HTF' : '⚠ counter-trend' }}
+              <div class="bias-label">Signal (weighted engines)</div>
+              <div class="bias-value" :style="{ color: signalDir === 'BULL' ? 'var(--bull)' : signalDir === 'BEAR' ? 'var(--bear)' : 'var(--dim)' }">
+                {{ signalDir === 'BULL' ? 'BULLISH' : signalDir === 'BEAR' ? 'BEARISH' : 'NEUTRAL' }} — {{ aligned ? '✓ aligned with HTF' : conflict ? '⚠ HTF conflict' : '↔ waiting' }}
               </div>
             </div>
           </div>
-          <div :class="['bias-card', confluence?.pct >= 60 ? 'bull' : 'warn']" style="min-width: 180px">
+          <div :class="['bias-card', confluence?.adjustedPct >= 60 ? (confluence?.direction === 'BULL' ? 'bull' : 'bear') : 'warn']" style="min-width: 180px">
             <div>
-              <div class="bias-label">Action ({{ confluence?.pct || 0 }}%)</div>
-              <div class="bias-value" :style="{ color: confluence?.pct >= 60 ? 'var(--bull)' : 'var(--ob)' }">
+              <div class="bias-label">Action ({{ confluence?.adjustedPct || confluence?.pct || 0 }}%)</div>
+              <div class="bias-value" :style="{ color: confluence?.adjustedPct >= 60 ? (confluence?.direction === 'BULL' ? 'var(--bull)' : 'var(--bear)') : 'var(--ob)' }">
                 {{ confluence?.action || 'ANALYZING...' }}
               </div>
             </div>

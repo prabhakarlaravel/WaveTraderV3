@@ -132,12 +132,18 @@ class RunEnginesJob implements ShouldQueue, ShouldBeUnique
             ->get()
             ->toArray();
 
-        // Compute confluence score
+        // Compute HTF bias from cached overlays across 1D, 4H, 1H
+        $htfBias = $this->computeHtfBias($symbol->id);
+
+        // Compute confluence score with HTF bias (Layer 2 conflict gate)
         $lastClose = ! empty($candles) ? (float) end($candles)['close'] : 0;
         $confluence = null;
         try {
             if ($ew && $ms && $ob && $fvg && $smc && $vwap && $pa) {
-                $confluence = (new ConfluenceEngine())->score($ew, $ms, $ob, $fvg, $smc, $vwap, $pa, $lastClose);
+                $confluence = (new ConfluenceEngine())->score(
+                    $ew, $ms, $ob, $fvg, $smc, $vwap, $pa,
+                    $lastClose, $htfBias, $this->timeframe,
+                );
             }
         } catch (\Throwable $e) {
             Log::warning("Confluence scoring failed: {$e->getMessage()}");
@@ -191,6 +197,37 @@ class RunEnginesJob implements ShouldQueue, ShouldBeUnique
         $cached = Redis::get($key);
 
         return $cached ? json_decode($cached, true) : null;
+    }
+
+    /**
+     * Compute HTF bias by reading cached overlay trends from 1D, 4H, 1H.
+     * Returns 'BULL', 'BEAR', or 'NEUTRAL'.
+     */
+    private function computeHtfBias(int $symbolId): string
+    {
+        $htfTimeframes = ['1D', '4H', '1H'];
+        $bullCount = 0;
+        $bearCount = 0;
+
+        foreach ($htfTimeframes as $tf) {
+            $cached = self::getCachedOverlays($symbolId, $tf);
+            $trend = $cached['metadata']['trend'] ?? 'neutral';
+
+            if ($trend === 'bullish') {
+                $bullCount++;
+            } elseif ($trend === 'bearish') {
+                $bearCount++;
+            }
+        }
+
+        if ($bullCount > $bearCount) {
+            return 'BULL';
+        }
+        if ($bearCount > $bullCount) {
+            return 'BEAR';
+        }
+
+        return 'NEUTRAL';
     }
 
     private function persistResult(EngineResult $result, int $symbolId): void
