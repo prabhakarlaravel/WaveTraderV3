@@ -1,7 +1,7 @@
 import { watch, ref, nextTick } from 'vue'
 import { LineSeries } from 'lightweight-charts'
 import { toISTEpoch } from '../utils/timezone'
-import { createProjectileRenderer } from './useWaveProjectile'
+// useWaveProjectile removed — projected curves/cones were unreliable
 
 /**
  * Full SVG overlay system for rendering waves, OBs, FVGs, BOS/CHOCH, VWAP,
@@ -60,12 +60,6 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     containerEl = el
   }
 
-  // ── Wave Projectile renderer (lazy-initialized) ──
-  let projectile = null
-  function getProjectileRenderer() {
-    if (!projectile) projectile = createProjectileRenderer(getX, getY, toUnix)
-    return projectile
-  }
 
   // ── Render all overlays ──
   function renderAll() {
@@ -101,12 +95,8 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     // Live edge: connect last confirmed wave to current price + forming wave tentative pivots
     if (toggles.waves) renderFormingWave(overlays.formingWave || null, overlays.waveLabels || [], svg)
 
-    // Projectile replaces the simpler wave targets + time estimate when enabled
-    if (toggles.projectile) {
-      try { getProjectileRenderer().render(svg, w, h, overlays) } catch (e) { /* projectile render error */ }
-    } else {
-      if (toggles.waves) renderWaveTargets(overlays.nextTargets || {}, svg, w)
-    }
+    // Fib price targets + invalidation levels (reliable part of wave projections)
+    if (toggles.waves) renderWaveTargets(overlays.nextTargets || {}, svg, w)
 
     if (toggles.signals) { try { renderSignalMarkers() } catch (e) { /* markers may fail if series not ready */ } }
   }
