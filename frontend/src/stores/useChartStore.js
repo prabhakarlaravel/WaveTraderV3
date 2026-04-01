@@ -23,17 +23,17 @@ export const useChartStore = defineStore('chart', () => {
     symbols.value.find((s) => s.id === activeSymbolId.value)
   )
 
-  // Cached formatted arrays — only reformat when candles actually change
-  // Uses a generation counter to avoid full O(n) remap on every live tick
+  // Cached formatted arrays — only reformat when candles actually change.
+  // Incremental path updates only the tail, then returns a NEW shallow copy
+  // so Vue's watch() detects the change (Object.is check on array reference).
   let _cachedCandles = []
   let _cachedVolume = []
   let _cachedLength = 0
-  let _cachedGeneration = 0
 
   const formattedCandles = computed(() => {
     const raw = candles.value
     const len = raw.length
-    if (len === 0) { _cachedCandles = []; _cachedLength = 0; return _cachedCandles }
+    if (len === 0) { _cachedCandles = []; _cachedLength = 0; return [] }
 
     // Full remap only when array size changes significantly (symbol/TF switch)
     if (Math.abs(len - _cachedLength) > 2 || _cachedLength === 0) {
@@ -46,7 +46,7 @@ export const useChartStore = defineStore('chart', () => {
       }))
       _cachedLength = len
     } else {
-      // Incremental: update only the last candle (live tick) and append new ones
+      // Incremental: append new candles
       while (_cachedCandles.length < len) {
         const c = raw[_cachedCandles.length]
         _cachedCandles.push({
@@ -57,7 +57,7 @@ export const useChartStore = defineStore('chart', () => {
           close: parseFloat(c.close),
         })
       }
-      // Always update the last candle (forming candle)
+      // Always update the last candle (forming candle with new close/high/low)
       const last = raw[len - 1]
       _cachedCandles[len - 1] = {
         time: toISTEpoch(last.timestamp),
@@ -68,13 +68,15 @@ export const useChartStore = defineStore('chart', () => {
       }
       _cachedLength = len
     }
-    return _cachedCandles
+    // Return a new shallow copy so Vue watch() detects the change.
+    // This is O(n) pointer copy (~0.1ms for 5000 candles) — NOT a deep clone.
+    return [..._cachedCandles]
   })
 
   const formattedVolume = computed(() => {
     const raw = candles.value
     const len = raw.length
-    if (len === 0) { _cachedVolume = []; return _cachedVolume }
+    if (len === 0) { _cachedVolume = []; return [] }
 
     if (Math.abs(len - _cachedVolume.length) > 2 || _cachedVolume.length === 0) {
       _cachedVolume = raw.map((c) => {
@@ -106,7 +108,7 @@ export const useChartStore = defineStore('chart', () => {
         color: close >= open ? 'rgba(38, 166, 154, 0.3)' : 'rgba(239, 83, 80, 0.3)',
       }
     }
-    return _cachedVolume
+    return [..._cachedVolume]
   })
 
   async function fetchSymbols() {

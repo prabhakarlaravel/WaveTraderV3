@@ -102,6 +102,12 @@ function updatePrice() {
   const prevPrice = parseFloat(prev.close)
   const change = prevPrice ? ((price - prevPrice) / prevPrice * 100) : 0
   lastPrice.value = { price, change, bull: change >= 0 }
+
+  // Dynamic title bar: "NIFTY BANK 51,489.80 (+0.12%) — WaveTrader"
+  const ticker = chartStore.activeSymbol?.ticker || ''
+  const formatted = price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const sign = change >= 0 ? '+' : ''
+  document.title = `${ticker} ${formatted} (${sign}${change.toFixed(2)}%) — WaveTrader`
 }
 
 const htfDir = computed(() => {
