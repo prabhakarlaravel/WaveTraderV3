@@ -5,8 +5,12 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Candle;
+use App\Models\Symbol;
 use App\Models\Trade;
 use App\Services\AutoTradeService;
+use App\Services\BlackScholesService;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -177,5 +181,116 @@ class TradeController extends Controller
                 ],
             ],
         ]);
+    }
+
+    /**
+     * Options chain: Black-Scholes theoretical pricing for paper trading.
+     *
+     * No auth required — this is a read-only calculation endpoint for paper traders.
+     */
+    public function optionsChain(Request $request): JsonResponse
+    {
+        $request->validate([
+            'symbol_id' => 'required|exists:symbols,id',
+            'expiry' => 'nullable|date_format:Y-m-d',
+            'iv' => 'nullable|numeric|min:0.01|max:5.0',
+        ]);
+
+        $symbol = Symbol::findOrFail($request->query('symbol_id'));
+
+        // Get the current spot price from the latest candle close (1M timeframe preferred)
+        $latestCandle = Candle::where('symbol_id', $symbol->id)
+            ->whereIn('timeframe', ['1M', '5M', '15M', '1H', '1D'])
+            ->orderByDesc('timestamp')
+            ->first();
+
+        if (!$latestCandle) {
+            return response()->json([
+                'error' => 'No candle data available for this symbol.',
+            ], 422);
+        }
+
+        $spot = (float) $latestCandle->close;
+        $iv = (float) ($request->query('iv') ?? 0.15);
+
+        // Determine expiry: use provided date or calculate nearest Thursday (NSE weekly expiry)
+        $expiry = $request->query('expiry')
+            ? $request->query('expiry')
+            : $this->nearestThursday();
+
+        // Determine strike interval based on symbol ticker and exchange
+        $strikeInterval = $this->resolveStrikeInterval($symbol, $spot);
+
+        $bsService = new BlackScholesService();
+        $atmStrike = $bsService->atmStrike($spot, $strikeInterval);
+        $chain = $bsService->chain($spot, $expiry, $strikeInterval, $iv);
+
+        return response()->json([
+            'spot' => $spot,
+            'expiry' => $expiry,
+            'strikeInterval' => $strikeInterval,
+            'atmStrike' => $atmStrike,
+            'iv' => $iv,
+            'symbol' => $symbol->ticker,
+            'exchange' => $symbol->exchange,
+            'chain' => $chain,
+        ]);
+    }
+
+    /**
+     * Get the nearest Thursday (NSE weekly expiry day).
+     *
+     * If today is Thursday, use today. Otherwise, find the next Thursday.
+     */
+    private function nearestThursday(): string
+    {
+        $today = Carbon::now('Asia/Kolkata');
+
+        if ($today->isThursday()) {
+            return $today->format('Y-m-d');
+        }
+
+        return $today->copy()->next(Carbon::THURSDAY)->format('Y-m-d');
+    }
+
+    /**
+     * Resolve the strike interval based on the symbol's ticker and exchange.
+     *
+     * - BANKNIFTY: 100
+     * - NIFTY: 50
+     * - Other NSE stocks: 10
+     * - Default (crypto, forex, etc.): spot * 0.005 rounded to a clean number
+     */
+    private function resolveStrikeInterval(Symbol $symbol, float $spot): float
+    {
+        $ticker = strtoupper($symbol->ticker);
+        $exchange = strtoupper($symbol->exchange);
+
+        // NSE index options (exchange may be stored as 'zerodha', 'NSE', or 'NFO')
+        if (in_array($exchange, ['NSE', 'NFO', 'ZERODHA'])) {
+            if (str_contains($ticker, 'BANKNIFTY') || str_contains($ticker, 'NIFTY BANK')) {
+                return 100.0;
+            }
+
+            if (str_contains($ticker, 'NIFTY')) {
+                return 50.0;
+            }
+
+            // NSE stocks (F&O segment)
+            return 10.0;
+        }
+
+        // For other markets: calculate as 0.5% of spot, rounded to a clean number
+        $raw = $spot * 0.005;
+
+        if ($raw >= 100) {
+            return round($raw / 100) * 100;
+        } elseif ($raw >= 10) {
+            return round($raw / 10) * 10;
+        } elseif ($raw >= 1) {
+            return round($raw);
+        } else {
+            return round($raw, 2);
+        }
     }
 }

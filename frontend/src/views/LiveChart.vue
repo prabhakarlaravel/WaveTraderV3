@@ -13,7 +13,7 @@ import { useTradeStore } from '../stores/useTradeStore'
 const chartStore = useChartStore()
 const realtime = useRealtimeStore()
 const tradeStore = useTradeStore()
-const rightPanel = ref('trade') // 'trade' | 'signals'
+const rightPanel = ref('matrix') // 'matrix' | 'trade'
 
 const chartContainer = ref(null)
 const chartRef = ref(null)
@@ -336,25 +336,25 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
       <div v-if="showMatrix" class="matrix-panel">
         <!-- Panel tabs -->
         <div class="flex" style="border-bottom: 1px solid var(--border)">
-          <button @click="rightPanel = 'trade'" class="flex-1 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider transition"
-            :style="rightPanel === 'trade' ? 'color: var(--bull); border-bottom: 2px solid var(--bull)' : 'color: var(--dim)'">
-            Trade
-          </button>
           <button @click="rightPanel = 'matrix'" class="flex-1 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider transition"
             :style="rightPanel === 'matrix' ? 'color: var(--wave); border-bottom: 2px solid var(--wave)' : 'color: var(--dim)'">
             Wave Matrix
           </button>
-        </div>
-
-        <!-- Trade panel -->
-        <div v-if="rightPanel === 'trade'" class="flex-1 overflow-hidden flex flex-col">
-          <TradePanel />
+          <button @click="rightPanel = 'trade'" class="flex-1 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider transition"
+            :style="rightPanel === 'trade' ? 'color: var(--bull); border-bottom: 2px solid var(--bull)' : 'color: var(--dim)'">
+            Trade
+          </button>
         </div>
 
         <!-- Matrix panel content -->
         <div v-if="rightPanel === 'matrix'" class="flex-1 overflow-y-auto">
           <WaveMatrixPanel />
         </div><!-- close matrix content -->
+
+        <!-- Trade panel -->
+        <div v-if="rightPanel === 'trade'" class="flex-1 overflow-hidden flex flex-col">
+          <TradePanel />
+        </div>
       </div><!-- close matrix-panel -->
     </div><!-- close main-area -->
   </div><!-- close dashboard -->

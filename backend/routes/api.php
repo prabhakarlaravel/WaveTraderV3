@@ -40,6 +40,9 @@ Route::prefix('v1')->group(function () {
     // Signals
     Route::get('signals/{symbol}', [WaveController::class, 'signals']);
 
+    // Options chain (no auth — paper trading calculator)
+    Route::get('trades/options-chain', [TradeController::class, 'optionsChain']);
+
     // Trades (auth required)
     Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('trades', TradeController::class);
