@@ -59,6 +59,7 @@ const optionType = ref('CE')
 const optionPremium = ref(null)
 const optionExpiry = ref(null)
 const optionLotSize = ref(null)
+const manualLots = ref(null) // null = use auto-calc from risk
 
 // Forex-specific
 const forexLotSize = ref(0.1)
@@ -170,6 +171,11 @@ function cancelSignalTrade() {
 // ---------------------------------------------------------------------------
 // Options chain event
 // ---------------------------------------------------------------------------
+function adjustLots(delta) {
+  const current = manualLots.value ?? optionsCalc.value?.lots ?? 1
+  manualLots.value = Math.max(1, current + delta)
+}
+
 function onSelectStrike(payload) {
   const type = payload.type || payload.option_type || 'CE'
   optionStrike.value = payload.strike
@@ -177,6 +183,7 @@ function onSelectStrike(payload) {
   optionPremium.value = payload.premium
   optionExpiry.value = payload.expiry || null
   optionLotSize.value = payload.lot_size || null
+  manualLots.value = null // reset to auto-calc for new strike
   direction.value = type === 'PE' ? 'short' : 'long'
 }
 
@@ -196,9 +203,17 @@ const optionsCalc = computed(() => {
   if (instrumentType.value !== 'options') return null
   const premium = parseFloat(optionPremium.value) || 0
   const lotSz = parseInt(optionLotSize.value) || 1
-  const risk = effectiveRisk.value
-  if (!premium || !risk) return null
-  const lots = Math.floor(risk / (premium * lotSz))
+  if (!premium) return null
+
+  // Manual lots override or auto-calc from risk
+  let lots
+  if (manualLots.value != null && manualLots.value > 0) {
+    lots = manualLots.value
+  } else {
+    const risk = effectiveRisk.value
+    if (!risk) return null
+    lots = Math.max(1, Math.floor(risk / (premium * lotSz)))
+  }
   const totalQty = lots * lotSz
   const totalCost = premium * totalQty
   return { lots, totalQty, totalCost }
@@ -455,19 +470,28 @@ const actionLabel = computed(() => {
             style="width:100%;padding:6px 10px;border-radius:5px;font-size:11px;background:#182240;border:1px solid #243354;color:#c8d3e8;font-family:'SF Mono',Consolas,monospace;outline:none;" />
         </div>
 
-        <!-- Lots calc display -->
-        <div v-if="optionsCalc" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px;text-align:center;">
-          <div style="padding:4px;border-radius:4px;background:rgba(24,34,64,0.5);">
-            <div style="font-size:9px;color:#4a5a7a;">Lots</div>
-            <div style="font-family:'SF Mono',Consolas,monospace;font-size:11px;font-weight:600;color:#c8d3e8;">{{ optionsCalc.lots }}</div>
+        <!-- Lots input with +/- and summary -->
+        <div v-if="optionStrike && optionPremium" style="margin-bottom:8px;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+            <div style="font-size:9px;color:#5a6a8a;text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0;">Lots</div>
+            <button @click="adjustLots(-1)"
+              style="width:26px;height:26px;border-radius:4px;border:1px solid #243354;background:#182240;color:#c8d3e8;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;">
+              &minus;
+            </button>
+            <input :value="optionsCalc?.lots || 1" @input="e => { manualLots = Math.max(1, parseInt(e.target.value) || 1) }" type="number" min="1"
+              style="width:50px;padding:4px 6px;border-radius:4px;font-size:12px;font-weight:700;text-align:center;background:#182240;border:1px solid #243354;color:#c8d3e8;font-family:'SF Mono',Consolas,monospace;outline:none;" />
+            <button @click="adjustLots(1)"
+              style="width:26px;height:26px;border-radius:4px;border:1px solid #243354;background:#182240;color:#c8d3e8;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;">
+              +
+            </button>
+            <div style="flex:1;text-align:right;">
+              <span style="font-size:9px;color:#5a6a8a;">Qty: </span>
+              <span style="font-family:'SF Mono',Consolas,monospace;font-size:10px;font-weight:600;color:#c8d3e8;">{{ optionsCalc?.totalQty || 0 }}</span>
+            </div>
           </div>
-          <div style="padding:4px;border-radius:4px;background:rgba(24,34,64,0.5);">
-            <div style="font-size:9px;color:#4a5a7a;">Qty</div>
-            <div style="font-family:'SF Mono',Consolas,monospace;font-size:11px;font-weight:600;color:#c8d3e8;">{{ optionsCalc.totalQty }}</div>
-          </div>
-          <div style="padding:4px;border-radius:4px;background:rgba(24,34,64,0.5);">
-            <div style="font-size:9px;color:#4a5a7a;">Cost</div>
-            <div style="font-family:'SF Mono',Consolas,monospace;font-size:11px;font-weight:600;color:#c8d3e8;">{{ formatCurrency(optionsCalc.totalCost) }}</div>
+          <div v-if="optionsCalc" style="display:flex;align-items:center;justify-content:space-between;padding:4px 8px;border-radius:4px;background:rgba(24,34,64,0.4);">
+            <span style="font-size:9px;color:#5a6a8a;">Total Cost</span>
+            <span style="font-family:'SF Mono',Consolas,monospace;font-size:10px;font-weight:600;color:#c8d3e8;">{{ formatCurrency(optionsCalc.totalCost) }}</span>
           </div>
         </div>
 
