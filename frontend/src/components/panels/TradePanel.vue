@@ -60,6 +60,7 @@ const optionPremium = ref(null)
 const optionExpiry = ref(null)
 const optionLotSize = ref(null)
 const manualLots = ref(null) // null = use auto-calc from risk
+const chainExpanded = ref(true) // collapsible options chain
 
 // Forex-specific
 const forexLotSize = ref(0.1)
@@ -185,6 +186,7 @@ function onSelectStrike(payload) {
   optionLotSize.value = payload.lot_size || null
   manualLots.value = null // reset to auto-calc for new strike
   direction.value = type === 'PE' ? 'short' : 'long'
+  chainExpanded.value = false // auto-collapse to show trade form + positions
 }
 
 // ---------------------------------------------------------------------------
@@ -442,15 +444,32 @@ const actionLabel = computed(() => {
       <!-- 3A. NSE OPTIONS FORM -->
       <!-- ============================================================== -->
       <template v-if="instrumentType === 'options'">
-        <!-- Options chain component -->
+        <!-- Collapsible Options chain -->
         <div style="margin-bottom:8px;">
-          <OptionsChainPanel
-            :spot="currentPrice"
-            :symbol-id="chartStore.activeSymbolId"
-            :ticker="chartStore.activeSymbol?.ticker || ''"
-            :confluence="confluence"
-            @select-strike="onSelectStrike"
-          />
+          <div @click="chainExpanded = !chainExpanded"
+            style="display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-radius:4px;cursor:pointer;background:#182240;border:1px solid #243354;user-select:none;">
+            <span style="font-size:10px;font-weight:600;color:#8892a8;text-transform:uppercase;letter-spacing:0.5px;">
+              Options Chain
+            </span>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span v-if="optionStrike && !chainExpanded"
+                style="font-family:'SF Mono',Consolas,monospace;font-size:9px;padding:1px 6px;border-radius:3px;"
+                :style="{ background: optionType === 'CE' ? 'rgba(0,220,130,0.15)' : 'rgba(255,59,92,0.15)', color: optionType === 'CE' ? '#00dc82' : '#ff3b5c' }">
+                {{ optionStrike }} {{ optionType }}
+              </span>
+              <span style="font-size:10px;color:#5a6a8a;transition:transform 0.2s;"
+                :style="{ transform: chainExpanded ? 'rotate(180deg)' : 'rotate(0)' }">&#9660;</span>
+            </div>
+          </div>
+          <div v-show="chainExpanded" style="margin-top:6px;">
+            <OptionsChainPanel
+              :spot="currentPrice"
+              :symbol-id="chartStore.activeSymbolId"
+              :ticker="chartStore.activeSymbol?.ticker || ''"
+              :confluence="confluence"
+              @select-strike="onSelectStrike"
+            />
+          </div>
         </div>
 
         <!-- Selected strike display -->
@@ -796,6 +815,33 @@ const actionLabel = computed(() => {
     <!-- 4. OPEN POSITIONS -->
     <!-- ================================================================== -->
     <div style="flex:1;overflow-y:auto;min-height:0;">
+
+      <!-- Live P&L Banner — prominent profit/loss indicator -->
+      <div v-if="tradeStore.openTrades.length"
+        style="margin:6px 10px;border-radius:6px;padding:10px 12px;text-align:center;"
+        :style="{
+          background: totalUnrealized > 0 ? 'rgba(0,220,130,0.08)' : totalUnrealized < 0 ? 'rgba(255,59,92,0.08)' : 'rgba(90,106,138,0.08)',
+          border: '1px solid ' + (totalUnrealized > 0 ? 'rgba(0,220,130,0.25)' : totalUnrealized < 0 ? 'rgba(255,59,92,0.25)' : 'rgba(90,106,138,0.2)'),
+        }">
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;"
+          :style="{ color: totalUnrealized > 0 ? '#00dc82' : totalUnrealized < 0 ? '#ff3b5c' : '#5a6a8a' }">
+          {{ totalUnrealized > 0 ? 'IN PROFIT' : totalUnrealized < 0 ? 'IN LOSS' : 'BREAK EVEN' }}
+        </div>
+        <div style="font-family:'SF Mono',Consolas,monospace;font-size:18px;font-weight:800;letter-spacing:-0.5px;"
+          :style="{ color: totalUnrealized > 0 ? '#00dc82' : totalUnrealized < 0 ? '#ff3b5c' : '#8892a8' }">
+          {{ totalUnrealized >= 0 ? '+' : '' }}{{ formatPnl(totalUnrealized) }}
+        </div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-top:4px;">
+          <span style="font-size:9px;color:#5a6a8a;">
+            {{ tradeStore.openTrades.length }} position{{ tradeStore.openTrades.length > 1 ? 's' : '' }}
+          </span>
+          <span v-if="tradeStore.closedTrades.length" style="font-size:9px;color:#5a6a8a;">
+            Realized: <span style="font-weight:600;" :style="{ color: tradeStore.totalPnl >= 0 ? '#00dc82' : '#ff3b5c' }">{{ formatPnl(tradeStore.totalPnl) }}</span>
+          </span>
+        </div>
+      </div>
+
+      <!-- Positions header -->
       <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid #1a2844;">
         <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:#5a6a8a;">Open Positions</span>
         <span style="font-size:9px;font-weight:700;padding:1px 7px;border-radius:10px;background:#182240;color:#8892a8;">{{ tradeStore.openTrades.length }}</span>
