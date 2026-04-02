@@ -330,7 +330,7 @@ const colPeStyle = { textAlign: 'left', paddingLeft: '4px' }
 
 const chainBodyStyle = {
   overflowY: 'auto',
-  maxHeight: '400px',
+  maxHeight: '180px',
   scrollbarWidth: 'thin',
   scrollbarColor: '#243354 #0f1729',
 }
@@ -338,7 +338,7 @@ const chainBodyStyle = {
 const rowBaseStyle = {
   display: 'grid',
   gridTemplateColumns: '1fr 50px 80px 50px 1fr',
-  padding: '4px 10px',
+  padding: '2px 10px',
   borderBottom: '1px solid rgba(36, 51, 84, 0.4)',
   transition: 'background 0.15s',
   cursor: 'default',
