@@ -140,12 +140,13 @@ function cancelSignalTrade() {
 // Options chain event
 // ---------------------------------------------------------------------------
 function onSelectStrike(payload) {
+  const type = payload.type || payload.option_type || 'CE'
   optionStrike.value = payload.strike
-  optionType.value = payload.option_type || 'CE'
+  optionType.value = type
   optionPremium.value = payload.premium
   optionExpiry.value = payload.expiry || null
   optionLotSize.value = payload.lot_size || null
-  direction.value = payload.option_type === 'PE' ? 'short' : 'long'
+  direction.value = type === 'PE' ? 'short' : 'long'
 }
 
 // ---------------------------------------------------------------------------
