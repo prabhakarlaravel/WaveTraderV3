@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useChartStore } from './useChartStore'
+import { estimateLivePremium } from '../utils/blackScholes'
 
 const STORAGE_KEY = 'wt3_paper_trades'
 const CAPITAL_KEY = 'wt3_virtual_capital'
@@ -133,18 +134,33 @@ export const useTradeStore = defineStore('trade', () => {
   }
 
   /**
-   * Calculate unrealized P&L for a single open trade at a given price.
+   * Calculate unrealized P&L for a single open trade at current spot price.
+   * For options: estimates the current premium via Black-Scholes from spot price.
+   * For equity/crypto/forex: uses spot price directly.
    */
-  function calcUnrealizedPnl(trade, currentPrice) {
-    if (!currentPrice || trade.status !== 'open') return 0
-    return _calcPnl(trade, currentPrice, null)
+  function calcUnrealizedPnl(trade, currentSpotPrice) {
+    if (!currentSpotPrice || trade.status !== 'open') return 0
+
+    if (trade.instrument_type === 'options' && trade.premium != null && trade.strike) {
+      const livePremium = estimateLivePremium(trade, currentSpotPrice)
+      if (livePremium != null) {
+        return _calcPnl(trade, currentSpotPrice, livePremium)
+      }
+      // Fallback: intrinsic value only
+      const intrinsic = trade.option_type === 'CE'
+        ? Math.max(0, currentSpotPrice - trade.strike)
+        : Math.max(0, trade.strike - currentSpotPrice)
+      return _calcPnl(trade, currentSpotPrice, intrinsic)
+    }
+
+    return _calcPnl(trade, currentSpotPrice, null)
   }
 
   /**
-   * Total unrealized P&L across all open trades at given price.
+   * Total unrealized P&L across all open trades at given spot price.
    */
-  function totalUnrealizedPnl(currentPrice) {
-    return openTrades.value.reduce((sum, t) => sum + calcUnrealizedPnl(t, currentPrice), 0)
+  function totalUnrealizedPnl(currentSpotPrice) {
+    return openTrades.value.reduce((sum, t) => sum + calcUnrealizedPnl(t, currentSpotPrice), 0)
   }
 
   // ---------------------------------------------------------------------------
@@ -238,19 +254,28 @@ export const useTradeStore = defineStore('trade', () => {
   // ---------------------------------------------------------------------------
 
   /**
-   * Close a trade at given exit price.
-   * For options, optionally pass exitPremium as third arg.
+   * Close a trade at given exit (spot) price.
+   * For options: estimates exit premium from spot price via Black-Scholes
+   * unless exitPremium is explicitly provided.
    */
-  function closeTrade(tradeId, exitPrice, exitPremium = null) {
+  function closeTrade(tradeId, exitSpotPrice, exitPremium = null) {
     const idx = trades.value.findIndex(t => t.id === tradeId)
     if (idx === -1) return null
 
     const trade = trades.value[idx]
-    const pnl = _calcPnl(trade, exitPrice, exitPremium)
+
+    // For options: compute exit premium from spot if not given
+    let finalExitPremium = exitPremium
+    if (trade.instrument_type === 'options' && trade.premium != null && finalExitPremium == null) {
+      finalExitPremium = estimateLivePremium(trade, exitSpotPrice)
+    }
+
+    const pnl = _calcPnl(trade, exitSpotPrice, finalExitPremium)
 
     trades.value[idx] = {
       ...trade,
-      exit_price: exitPrice,
+      exit_price: exitSpotPrice,
+      exit_premium: finalExitPremium,
       status: 'closed',
       pnl: Math.round(pnl * 100) / 100,
       closed_at: new Date().toISOString(),

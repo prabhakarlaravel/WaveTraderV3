@@ -85,8 +85,18 @@ function selectStrike(row, type) {
     type,
     premium: type === 'CE' ? row.ce_premium : row.pe_premium,
     delta: type === 'CE' ? row.ce_delta : row.pe_delta,
+    expiry: selectedExpiry.value,
+    lot_size: resolveLotSize(),
   }
   emit('select-strike', payload)
+}
+
+// Resolve lot size based on ticker
+function resolveLotSize() {
+  const ticker = (props.ticker || '').toUpperCase()
+  if (ticker.includes('BANKNIFTY')) return 15
+  if (ticker.includes('NIFTY')) return 25
+  return 1
 }
 
 function isItmCe(strike) {

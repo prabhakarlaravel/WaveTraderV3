@@ -1,8 +1,9 @@
 <script setup>
-import { ref, computed, watch, defineAsyncComponent } from 'vue'
+import { ref, computed, watch, defineAsyncComponent, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import { useTradeStore } from '../../stores/useTradeStore'
 import { useChartStore } from '../../stores/useChartStore'
+import { estimateLivePremium } from '../../utils/blackScholes'
 
 const OptionsChainPanel = defineAsyncComponent(() =>
   import('./OptionsChainPanel.vue')
@@ -79,7 +80,21 @@ const currentPrice = computed(() => {
   return parseFloat(c[c.length - 1].close)
 })
 
+// ---------------------------------------------------------------------------
+// Live P&L ticker — updates every 1s for dynamic premium changes
+// ---------------------------------------------------------------------------
+const pnlTick = ref(0) // reactive counter to force recompute
+let _pnlTimer = null
+
+onMounted(() => {
+  _pnlTimer = setInterval(() => { pnlTick.value++ }, 1000)
+})
+onUnmounted(() => {
+  if (_pnlTimer) clearInterval(_pnlTimer)
+})
+
 const unrealizedPnls = computed(() => {
+  void pnlTick.value // depend on tick for 1s refresh
   const price = currentPrice.value
   const result = {}
   for (const trade of tradeStore.openTrades) {
@@ -88,7 +103,23 @@ const unrealizedPnls = computed(() => {
   return result
 })
 
-const totalUnrealized = computed(() => tradeStore.totalUnrealizedPnl(currentPrice.value))
+const totalUnrealized = computed(() => {
+  void pnlTick.value // depend on tick for 1s refresh
+  return tradeStore.totalUnrealizedPnl(currentPrice.value)
+})
+
+// Live premium for each open options trade (for display)
+const livePremiums = computed(() => {
+  void pnlTick.value
+  const price = currentPrice.value
+  const result = {}
+  for (const trade of tradeStore.openTrades) {
+    if (trade.instrument_type === 'options' && trade.strike) {
+      result[trade.id] = estimateLivePremium(trade, price)
+    }
+  }
+  return result
+})
 
 // ---------------------------------------------------------------------------
 // Confluence / Signal Bridge
@@ -752,27 +783,51 @@ const actionLabel = computed(() => {
 
       <div v-for="trade in tradeStore.openTrades" :key="trade.id"
         style="padding:8px 12px;border-bottom:1px solid rgba(26,40,68,0.5);">
-        <!-- Row 1: Badge + unrealized P&L -->
+        <!-- Row 1: Badge + Strike (options) + unrealized P&L -->
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-          <span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;"
-            :style="{
-              background: tradeBadgeIsBull(trade) ? 'rgba(0,220,130,0.15)' : 'rgba(255,59,92,0.15)',
-              color: tradeBadgeIsBull(trade) ? '#00dc82' : '#ff3b5c',
-            }">
-            {{ tradeBadge(trade) }}
-          </span>
-          <span style="font-family:'SF Mono',Consolas,monospace;font-size:11px;font-weight:700;"
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;"
+              :style="{
+                background: tradeBadgeIsBull(trade) ? 'rgba(0,220,130,0.15)' : 'rgba(255,59,92,0.15)',
+                color: tradeBadgeIsBull(trade) ? '#00dc82' : '#ff3b5c',
+              }">
+              {{ tradeBadge(trade) }}
+            </span>
+            <span v-if="trade.instrument_type === 'options' && trade.strike"
+              style="font-family:'SF Mono',Consolas,monospace;font-size:9px;color:#8892a8;">
+              {{ trade.strike }}
+            </span>
+          </div>
+          <span style="font-family:'SF Mono',Consolas,monospace;font-size:12px;font-weight:700;"
             :style="{ color: (unrealizedPnls[trade.id] || 0) >= 0 ? '#00dc82' : '#ff3b5c' }">
             {{ formatPnl(unrealizedPnls[trade.id] || 0) }}
           </span>
         </div>
 
-        <!-- Row 2: Entry / Now prices -->
-        <div style="display:flex;align-items:center;justify-content:space-between;font-family:'SF Mono',Consolas,monospace;font-size:10px;color:#6a7a9a;margin-bottom:3px;">
-          <span>Entry: {{ formatPrice(trade.entry_price) }}</span>
-          <span style="color:#5a6a8a;">-></span>
-          <span>Now: {{ formatPrice(currentPrice) }}</span>
-        </div>
+        <!-- Row 2: Premium-based display for options -->
+        <template v-if="trade.instrument_type === 'options' && trade.premium != null">
+          <div style="display:flex;align-items:center;justify-content:space-between;font-family:'SF Mono',Consolas,monospace;font-size:10px;color:#6a7a9a;margin-bottom:3px;">
+            <span>Buy: {{ currencySymbol }}{{ parseFloat(trade.premium).toFixed(2) }}</span>
+            <span style="color:#5a6a8a;font-size:8px;">&#9654;</span>
+            <span :style="{ color: livePremiums[trade.id] != null && livePremiums[trade.id] >= trade.premium ? '#00dc82' : '#ff3b5c' }">
+              LTP: {{ currencySymbol }}{{ livePremiums[trade.id] != null ? livePremiums[trade.id].toFixed(2) : '--' }}
+            </span>
+          </div>
+          <div style="font-family:'SF Mono',Consolas,monospace;font-size:9px;color:#5a6a8a;margin-bottom:3px;">
+            Spot: {{ formatPrice(currentPrice) }} &middot; Qty: {{ trade.quantity }}{{ trade.lot_size ? ' x ' + trade.lot_size : '' }}
+          </div>
+        </template>
+
+        <!-- Row 2: Standard display for equity/crypto/forex -->
+        <template v-else>
+          <div style="display:flex;align-items:center;justify-content:space-between;font-family:'SF Mono',Consolas,monospace;font-size:10px;color:#6a7a9a;margin-bottom:3px;">
+            <span>Entry: {{ formatPrice(trade.entry_price) }}</span>
+            <span style="color:#5a6a8a;font-size:8px;">&#9654;</span>
+            <span :style="{ color: currentPrice >= trade.entry_price ? '#00dc82' : '#ff3b5c' }">
+              Now: {{ formatPrice(currentPrice) }}
+            </span>
+          </div>
+        </template>
 
         <!-- Row 3: SL / TP / Trailing indicators -->
         <div v-if="trade.sl || trade.tp || trade.trailing_stop" style="display:flex;gap:8px;font-family:'SF Mono',Consolas,monospace;font-size:9px;margin-bottom:4px;">
@@ -781,10 +836,12 @@ const actionLabel = computed(() => {
           <span v-if="trade.trailing_stop" style="color:#3b82f6;">TS: {{ trade.trailing_stop }}</span>
         </div>
 
-        <!-- Close button -->
+        <!-- Close button with exit premium for options -->
         <button @click="closeTrade(trade)"
           style="width:100%;padding:4px 0;border-radius:4px;font-size:9px;font-weight:600;border:none;cursor:pointer;background:rgba(255,59,92,0.1);border:1px solid rgba(255,59,92,0.25);color:#ff3b5c;transition:background 0.15s;">
-          Close @ {{ formatPrice(currentPrice) }}
+          Close @ {{ trade.instrument_type === 'options' && livePremiums[trade.id] != null
+            ? currencySymbol + livePremiums[trade.id].toFixed(2) + ' (premium)'
+            : formatPrice(currentPrice) }}
         </button>
       </div>
     </div>
