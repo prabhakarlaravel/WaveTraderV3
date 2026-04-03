@@ -184,16 +184,41 @@ function onVisibilityChange() {
 }
 
 onMounted(async () => {
-  initChart()
-  setContainer(chartContainer.value)
-  attachChartListeners()
-  await chartStore.fetchSymbols()
-  await chartStore.fetchCandles()
-  tradeStore.fetchTrades()
-  updateChartData()
-  renderAll()
+  // 1. Data fetch first — must succeed even if chart init fails
+  try {
+    await chartStore.fetchSymbols()
+    await chartStore.fetchCandles()
+    if (typeof tradeStore.loadTrades === 'function') tradeStore.loadTrades()
+  } catch (err) {
+    console.error('[LiveChart] Data fetch error:', err)
+  }
 
-  // Sync timer — only ticks when tab is visible
+  // 2. Chart init — may fail on first mount if container not ready
+  try {
+    initChart()
+    setContainer(chartContainer.value)
+    attachChartListeners()
+    updateChartData()
+    renderAll()
+  } catch (err) {
+    console.error('[LiveChart] Chart init error:', err)
+    // Retry once after next frame — container may not have been measured yet
+    requestAnimationFrame(() => {
+      try {
+        if (!chartRef.value) {
+          initChart()
+          setContainer(chartContainer.value)
+          attachChartListeners()
+        }
+        updateChartData()
+        renderAll()
+      } catch (retryErr) {
+        console.error('[LiveChart] Chart retry failed:', retryErr)
+      }
+    })
+  }
+
+  // 3. Timers — always start regardless of chart state
   syncTickInterval = setInterval(() => { if (isTabVisible) nowTick.value = Date.now() }, 1000)
   document.addEventListener('visibilitychange', onVisibilityChange)
 })

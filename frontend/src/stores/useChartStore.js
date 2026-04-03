@@ -192,7 +192,11 @@ export const useChartStore = defineStore('chart', () => {
 
       // Always set overlays (even if still computing after retries exhausted)
       overlays.value = data
-      overlaysLoading.value = false
+      // Clear loading if we got real data OR all retries are done
+      const hasRealData = (data.waveLabels?.length > 0 || data.signals?.length > 0 || data.confluence)
+      if (hasRealData || !data.computing) {
+        overlaysLoading.value = false
+      }
     } catch {
       overlays.value = { ..._emptyOverlays }
       overlaysLoading.value = false
