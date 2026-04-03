@@ -145,9 +145,15 @@ export const useChartStore = defineStore('chart', () => {
         },
       })
       candles.value = data
-      await fetchOverlays()
-    } finally {
       loading.value = false
+      // Fire overlays fetch without awaiting — don't block chart render.
+      // Overlays will load in background and update reactively.
+      fetchOverlays()
+    } catch (err) {
+      loading.value = false
+      throw err
+    } finally {
+      // loading already set above
     }
   }
 
@@ -180,11 +186,11 @@ export const useChartStore = defineStore('chart', () => {
         },
       })
 
-      // Backend returns { computing: true } on cache miss — engines are running in background.
-      // Retry up to 4 times with increasing delays to pick up freshly computed overlays.
-      if (data.computing && retryCount < 4) {
-        const delay = retryCount < 2 ? 3000 : 5000 // 3s, 3s, 5s, 5s
-        console.log(`[Overlay] Cache miss — engines computing, retry #${retryCount + 1} in ${delay/1000}s`)
+      // Backend runs engines synchronously on cache miss, so this should
+      // return real data. Only retry if it still says computing (edge case).
+      if (data.computing && retryCount < 2) {
+        const delay = 5000
+        console.log(`[Overlay] Still computing — retry #${retryCount + 1} in ${delay/1000}s`)
         if (_overlayRetryTimer) clearTimeout(_overlayRetryTimer)
         _overlayRetryTimer = setTimeout(() => fetchOverlays(retryCount + 1), delay)
         return

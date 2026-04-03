@@ -164,12 +164,23 @@ class ChartController extends Controller
             return response()->json($emptyOverlay);
         }
 
-        // Dispatch engine run to background queue — overlays will arrive via
-        // Reverb OverlaysUpdated event. The frontend retries once after 3s
-        // if it receives an empty/computing response.
-        RunEnginesJob::dispatch($symbolId, $timeframe)->onQueue('engines');
+        // No queue worker in dev — run engines synchronously on cache miss.
+        // Frontend fires this without awaiting, so chart renders immediately
+        // while this request blocks until engines finish.
+        try {
+            Log::info("Overlay cache miss — running engines synchronously for symbol {$symbolId} [{$timeframe}]");
+            $job = new RunEnginesJob($symbolId, $timeframe);
+            $job->handle();
 
-        // Return empty overlay with a 'computing' flag so frontend knows to wait
+            $freshCached = RunEnginesJob::getCachedOverlays($symbolId, $timeframe);
+            if ($freshCached) {
+                return response()->json($freshCached);
+            }
+        } catch (\Throwable $e) {
+            Log::error("Sync engine run failed: {$e->getMessage()}");
+        }
+
+        // Fallback — return empty
         $emptyOverlay['computing'] = true;
         $emptyOverlay['computed_at'] = null;
 
