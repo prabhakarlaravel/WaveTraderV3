@@ -899,9 +899,12 @@ const actionLabel = computed(() => {
           <div style="display:flex;align-items:center;justify-content:space-between;font-family:'SF Mono',Consolas,monospace;font-size:10px;color:#6a7a9a;margin-bottom:3px;">
             <span>Entry: {{ formatPrice(trade.entry_price) }}</span>
             <span style="color:#5a6a8a;font-size:8px;">&#9654;</span>
-            <span :style="{ color: currentPrice >= trade.entry_price ? '#00dc82' : '#ff3b5c' }">
+            <span :style="{ color: (unrealizedPnls[trade.id] || 0) >= 0 ? '#00dc82' : '#ff3b5c' }">
               Now: {{ formatPrice(currentPrice) }}
             </span>
+          </div>
+          <div style="font-family:'SF Mono',Consolas,monospace;font-size:9px;color:#5a6a8a;margin-bottom:3px;">
+            {{ trade.type === 'long' ? 'LONG' : 'SHORT' }} &middot; Qty: {{ trade.quantity }}
           </div>
         </template>
 
