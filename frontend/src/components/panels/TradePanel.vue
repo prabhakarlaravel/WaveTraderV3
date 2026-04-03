@@ -265,7 +265,10 @@ watch(currentPrice, (price) => {
 // Submit trade
 // ---------------------------------------------------------------------------
 function submitTrade() {
-  if (!chartStore.activeSymbolId || !currentPrice.value) return
+  if (!chartStore.activeSymbolId || !currentPrice.value) {
+    console.warn('[Trade] Cannot place trade — no symbol or price data yet')
+    return
+  }
   submitting.value = true
   try {
     const base = {
@@ -622,13 +625,14 @@ const actionLabel = computed(() => {
 
         <!-- Submit -->
         <button @click="submitTrade" :disabled="submitting || !currentPrice"
-          style="width:100%;padding:8px 0;border-radius:5px;font-size:11px;font-weight:700;border:none;cursor:pointer;transition:opacity 0.15s;"
+          style="width:100%;padding:8px 0;border-radius:5px;font-size:11px;font-weight:700;border:none;transition:opacity 0.15s;"
           :style="{
             background: direction === 'long' ? '#00dc82' : '#ff3b5c',
             color: direction === 'long' ? '#000' : '#fff',
-            opacity: submitting ? 0.5 : 1,
+            opacity: (submitting || !currentPrice) ? 0.4 : 1,
+            cursor: !currentPrice ? 'not-allowed' : 'pointer',
           }">
-          {{ submitting ? 'Placing...' : actionLabel }}
+          {{ !currentPrice ? 'Waiting for price...' : submitting ? 'Placing...' : actionLabel }}
         </button>
       </template>
 
@@ -723,13 +727,14 @@ const actionLabel = computed(() => {
 
         <!-- Submit -->
         <button @click="submitTrade" :disabled="submitting || !currentPrice"
-          style="width:100%;padding:8px 0;border-radius:5px;font-size:11px;font-weight:700;border:none;cursor:pointer;transition:opacity 0.15s;"
+          style="width:100%;padding:8px 0;border-radius:5px;font-size:11px;font-weight:700;border:none;transition:opacity 0.15s;"
           :style="{
             background: direction === 'long' ? '#00dc82' : '#ff3b5c',
             color: direction === 'long' ? '#000' : '#fff',
-            opacity: submitting ? 0.5 : 1,
+            opacity: (submitting || !currentPrice) ? 0.4 : 1,
+            cursor: !currentPrice ? 'not-allowed' : 'pointer',
           }">
-          {{ submitting ? 'Placing...' : actionLabel }}
+          {{ !currentPrice ? 'Waiting for price...' : submitting ? 'Placing...' : actionLabel }}
         </button>
       </template>
 
@@ -800,13 +805,14 @@ const actionLabel = computed(() => {
 
         <!-- Submit -->
         <button @click="submitTrade" :disabled="submitting || !currentPrice"
-          style="width:100%;padding:8px 0;border-radius:5px;font-size:11px;font-weight:700;border:none;cursor:pointer;transition:opacity 0.15s;"
+          style="width:100%;padding:8px 0;border-radius:5px;font-size:11px;font-weight:700;border:none;transition:opacity 0.15s;"
           :style="{
             background: direction === 'long' ? '#00dc82' : '#ff3b5c',
             color: direction === 'long' ? '#000' : '#fff',
-            opacity: submitting ? 0.5 : 1,
+            opacity: (submitting || !currentPrice) ? 0.4 : 1,
+            cursor: !currentPrice ? 'not-allowed' : 'pointer',
           }">
-          {{ submitting ? 'Placing...' : actionLabel }}
+          {{ !currentPrice ? 'Waiting for price...' : submitting ? 'Placing...' : actionLabel }}
         </button>
       </template>
     </div>
