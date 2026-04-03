@@ -18,6 +18,7 @@ export const useChartStore = defineStore('chart', () => {
   const candles = ref([])
   const overlays = ref({ signals: [], orderBlocks: [], fvgs: [] })
   const loading = ref(false)
+  const overlaysLoading = ref(false) // separate flag for overlay/wave loading indicator
 
   const activeSymbol = computed(() =>
     symbols.value.find((s) => s.id === activeSymbolId.value)
@@ -127,9 +128,15 @@ export const useChartStore = defineStore('chart', () => {
     }
   }
 
+  const _emptyOverlays = { signals: [], orderBlocks: [], fvgs: [] }
+
   async function fetchCandles() {
     if (!activeSymbolId.value) return
     loading.value = true
+    overlaysLoading.value = true
+    // Bug fix #1: Clear old overlays immediately so stale data from previous symbol
+    // is never rendered on the new symbol's chart
+    overlays.value = { ..._emptyOverlays }
     try {
       const { data } = await axios.get('/api/v1/chart/candles', {
         params: {
@@ -145,9 +152,26 @@ export const useChartStore = defineStore('chart', () => {
   }
 
   let _overlayRetryTimer = null
+  let _overlayFetchSymbolId = null // Bug fix #2: track which symbol the retry chain belongs to
 
   async function fetchOverlays(retryCount = 0) {
     if (!activeSymbolId.value) return
+
+    // On first call (not a retry), record the symbol and cancel stale retry chains
+    if (retryCount === 0) {
+      if (_overlayRetryTimer) clearTimeout(_overlayRetryTimer)
+      _overlayRetryTimer = null
+      _overlayFetchSymbolId = activeSymbolId.value
+      overlaysLoading.value = true
+    }
+
+    // Bug fix #2: If symbol changed since retry chain started, abort this stale retry
+    if (_overlayFetchSymbolId !== activeSymbolId.value) {
+      console.log('[Overlay] Stale retry aborted — symbol changed')
+      overlaysLoading.value = false
+      return
+    }
+
     try {
       const { data } = await axios.get('/api/v1/chart/overlays', {
         params: {
@@ -168,8 +192,10 @@ export const useChartStore = defineStore('chart', () => {
 
       // Always set overlays (even if still computing after retries exhausted)
       overlays.value = data
+      overlaysLoading.value = false
     } catch {
-      overlays.value = { signals: [], orderBlocks: [], fvgs: [] }
+      overlays.value = { ..._emptyOverlays }
+      overlaysLoading.value = false
     }
   }
 
@@ -180,6 +206,10 @@ export const useChartStore = defineStore('chart', () => {
   }
 
   function setSymbol(id) {
+    // Bug fix #2: Cancel any pending overlay retry from previous symbol
+    if (_overlayRetryTimer) { clearTimeout(_overlayRetryTimer); _overlayRetryTimer = null }
+    // Bug fix #4: Clear stale confluence from previous symbol
+    mtfConfluence.value = null
     activeSymbolId.value = id
     try { localStorage.setItem(PERSIST_KEY, String(id)) } catch {}
     fetchCandles()
@@ -234,6 +264,7 @@ export const useChartStore = defineStore('chart', () => {
     activeTimeframe,
     candles,
     loading,
+    overlaysLoading,
     formattedCandles,
     formattedVolume,
     overlays,

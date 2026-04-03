@@ -290,7 +290,18 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
     <div class="main-area">
       <!-- Chart column -->
       <div class="chart-col">
-        <div ref="chartContainer" class="chart-container"></div>
+        <div ref="chartContainer" class="chart-container">
+          <!-- Loading overlay — shown during symbol/TF switch -->
+          <div v-if="chartStore.loading" class="chart-loading-overlay">
+            <div class="chart-spinner"></div>
+            <div class="chart-loading-text">Loading chart...</div>
+          </div>
+          <!-- Overlays computing indicator — subtle, non-blocking -->
+          <div v-else-if="chartStore.overlaysLoading" class="chart-computing-badge">
+            <div class="chart-spinner-sm"></div>
+            <span>Loading waves & signals...</span>
+          </div>
+        </div>
 
         <!-- Bias strip below chart — simplified for basic users -->
         <div class="bias-strip">
@@ -425,6 +436,37 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
 .main-area { flex: 1; display: flex; overflow: hidden; }
 .chart-col { flex: 1; display: flex; flex-direction: column; gap: 6px; padding: 8px; min-width: 0; }
 .chart-container { flex: 1; background: var(--bg); border-radius: 10px; border: 1px solid var(--border); overflow: hidden; position: relative; }
+
+/* ── Chart loading overlay ── */
+.chart-loading-overlay {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: rgba(10, 15, 30, 0.85); backdrop-filter: blur(4px);
+}
+.chart-loading-text {
+  margin-top: 12px; font-size: 11px; color: #6a7a9a;
+  text-transform: uppercase; letter-spacing: 1px; font-weight: 600;
+}
+.chart-spinner {
+  width: 32px; height: 32px; border: 3px solid #1a2844;
+  border-top-color: #3b82f6; border-radius: 50%;
+  animation: chart-spin 0.8s linear infinite;
+}
+.chart-computing-badge {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 15;
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 14px; border-radius: 20px;
+  background: rgba(15, 23, 42, 0.9); border: 1px solid #243354;
+  font-size: 10px; color: #6a7a9a; letter-spacing: 0.3px;
+  animation: chart-fade-in 0.3s ease;
+}
+.chart-spinner-sm {
+  width: 14px; height: 14px; border: 2px solid #1a2844;
+  border-top-color: #3b82f6; border-radius: 50%;
+  animation: chart-spin 0.8s linear infinite;
+}
+@keyframes chart-spin { to { transform: rotate(360deg); } }
+@keyframes chart-fade-in { from { opacity: 0; transform: translateX(-50%) translateY(-6px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 
 /* ── Bias strip ── */
 .bias-strip { display: flex; gap: 6px; }
