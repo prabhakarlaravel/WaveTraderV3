@@ -313,6 +313,11 @@ function closeTrade(trade) {
   tradeStore.closeTrade(trade.id, currentPrice.value)
 }
 
+function closeAllPositions() {
+  if (!currentPrice.value) return
+  tradeStore.closeAllTrades(currentPrice.value)
+}
+
 // ---------------------------------------------------------------------------
 // Formatting helpers
 // ---------------------------------------------------------------------------
@@ -850,7 +855,16 @@ const actionLabel = computed(() => {
       <!-- Positions header -->
       <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid #1a2844;">
         <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:#5a6a8a;">Open Positions</span>
-        <span style="font-size:9px;font-weight:700;padding:1px 7px;border-radius:10px;background:#182240;color:#8892a8;">{{ tradeStore.openTrades.length }}</span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <button v-if="tradeStore.openTrades.length > 1"
+            @click="closeAllPositions"
+            style="font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:2px 8px;border-radius:4px;border:1px solid rgba(255,59,92,0.35);background:rgba(255,59,92,0.08);color:#ff3b5c;cursor:pointer;transition:all 0.15s;"
+            onmouseover="this.style.background='rgba(255,59,92,0.2)'"
+            onmouseout="this.style.background='rgba(255,59,92,0.08)'">
+            Exit All
+          </button>
+          <span style="font-size:9px;font-weight:700;padding:1px 7px;border-radius:10px;background:#182240;color:#8892a8;">{{ tradeStore.openTrades.length }}</span>
+        </div>
       </div>
 
       <div v-if="!tradeStore.openTrades.length" style="padding:24px 12px;text-align:center;font-size:10px;color:#3a4a6a;">

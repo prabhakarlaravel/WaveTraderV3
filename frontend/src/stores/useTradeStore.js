@@ -272,7 +272,7 @@ export const useTradeStore = defineStore('trade', () => {
 
     const pnl = _calcPnl(trade, exitSpotPrice, finalExitPremium)
 
-    trades.value[idx] = {
+    const closed = {
       ...trade,
       exit_price: exitSpotPrice,
       exit_premium: finalExitPremium,
@@ -280,8 +280,25 @@ export const useTradeStore = defineStore('trade', () => {
       pnl: Math.round(pnl * 100) / 100,
       closed_at: new Date().toISOString(),
     }
+    // Use splice to guarantee Vue reactivity triggers
+    trades.value.splice(idx, 1, closed)
     persist()
-    return trades.value[idx]
+    return closed
+  }
+
+  /**
+   * Close all open positions at the current price.
+   */
+  function closeAllTrades(exitSpotPrice) {
+    const results = []
+    // Close in reverse to avoid index shifting issues
+    for (let i = trades.value.length - 1; i >= 0; i--) {
+      if (trades.value[i].status === 'open') {
+        const result = closeTrade(trades.value[i].id, exitSpotPrice)
+        if (result) results.push(result)
+      }
+    }
+    return results
   }
 
   // ---------------------------------------------------------------------------
@@ -468,7 +485,7 @@ export const useTradeStore = defineStore('trade', () => {
     calcUnrealizedPnl, totalUnrealizedPnl,
 
     // Trade actions
-    openTrade, closeTrade, updateTrade, checkStops,
+    openTrade, closeTrade, closeAllTrades, updateTrade, checkStops,
     deleteTrade, clearAll, loadTrades, persist,
 
     // Virtual account
