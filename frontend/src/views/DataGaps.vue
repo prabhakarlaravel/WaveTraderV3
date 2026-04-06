@@ -206,9 +206,18 @@ const calendarMonths = computed(() => {
       const key = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`
       const isFuture = date > now
 
+      // Market-type aware weekend handling:
+      // - Crypto (24/7): weekends are normal trading days, check for gaps
+      // - NSE: weekends are always closed (no trading)
+      // - Forex: Sat closed, Sun opens at 22:00 UTC — treat as weekend
+      const mkt = (scanResult.value?.marketType || '').toLowerCase()
+      const isCrypto = mkt === '24/7' || mkt === 'crypto'
+      const isForex = mkt === 'forex'
+      const weekendIsClosed = !isCrypto // NSE + Forex have weekend closures
+
       let status = 'ok'
       if (isFuture) status = 'future'
-      else if (isWeekend) status = 'weekend'
+      else if (isWeekend && weekendIsClosed) status = 'weekend'
       else if (holidayDates.has(key)) status = 'holiday'
       else if (noData || gapDates.has(key)) status = 'gap'
 
@@ -288,7 +297,7 @@ function queueStatusColor(s) {
               <span class="cal-leg"><span class="cal-dot" style="background:rgba(16,185,129,0.4)"></span>Complete</span>
               <span class="cal-leg"><span class="cal-dot" style="background:rgba(56,189,248,0.45);border:1px solid rgba(56,189,248,0.3)"></span>Holiday</span>
               <span class="cal-leg"><span class="cal-dot" style="background:rgba(239,68,68,0.55)"></span>Missing</span>
-              <span class="cal-leg"><span class="cal-dot" style="background:rgba(99,102,241,0.08);border:1px solid #2d2b3d"></span>Weekend</span>
+              <span v-if="(scanResult?.marketType || '').toLowerCase() !== '24/7'" class="cal-leg"><span class="cal-dot" style="background:rgba(99,102,241,0.08);border:1px solid #2d2b3d"></span>Weekend</span>
               <span class="cal-leg"><span class="cal-dot" style="background:rgba(71,85,105,0.15)"></span>Future</span>
             </div>
           </div>
@@ -433,7 +442,9 @@ function queueStatusColor(s) {
           </div>
           <div class="market-row" style="margin-top:6px">
             <span class="market-label">Weekends</span>
-            <span class="market-val">Excluded from gaps</span>
+            <span class="market-val" :style="{ color: (scanResult.marketType || '').toLowerCase() === '24/7' ? '#f59e0b' : '#6366f1' }">
+              {{ (scanResult.marketType || '').toLowerCase() === '24/7' ? 'Included (24/7 market)' : 'Excluded from gaps' }}
+            </span>
           </div>
         </div>
       </div>
