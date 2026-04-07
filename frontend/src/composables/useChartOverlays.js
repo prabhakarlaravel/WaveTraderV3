@@ -11,6 +11,7 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
   let vwapSeries = null
   let vwapU1Series = null
   let vwapL1Series = null
+  let fibPriceLines = [] // Track Fib price lines for cleanup
   const svgOverlay = ref(null)
 
   // Alias for overlay coordinate mapping — all times displayed in IST
@@ -719,62 +720,228 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     }
   }
 
-  // ── Wave target projections (fib zones + invalidation) ──
-  function renderWaveTargets(nextTargets, svg, chartWidth) {
-    if (!nextTargets || !nextTargets.targets || nextTargets.targets.length === 0) return
+  // ── Fibonacci Levels — Hybrid: Native Price Lines + SVG Zones ──
+  // Warm Gold monochrome palette — distinct from all other overlay colors
+  const FIB_GOLD        = 'rgba(212, 160, 84, '   // base gold (append opacity + ')')
+  const FIB_GOLD_HEX    = '#d4a054'
+  const FIB_BRIGHT_HEX  = '#e6b450'               // 0.618 emphasis
+  const FIB_DIM_HEX     = '#b08840'               // extensions
+
+  function cleanupFibLines() {
     if (!candleSeriesRef.value) return
+    for (const pl of fibPriceLines) {
+      try { candleSeriesRef.value.removePriceLine(pl) } catch { /* already removed */ }
+    }
+    fibPriceLines = []
+  }
 
-    const targets = nextTargets.targets
-    const invalidation = nextTargets.invalidation
-    const nextWave = nextTargets.nextWave
+  function renderWaveTargets(nextTargets, svg, chartWidth) {
+    // Always clean previous fib price lines before re-rendering
+    cleanupFibLines()
+
+    if (!nextTargets || !candleSeriesRef.value) return
     const retracements = nextTargets.retracements || []
+    const targets = nextTargets.targets || []
+    const invalidation = nextTargets.invalidation
+    const fibTargets = chartStore.overlays?.fibTargets || []
 
-    // Render each target zone
-    targets.forEach((t, i) => {
-      const y = candleSeriesRef.value.priceToCoordinate(t.price)
-      if (y === null || y < 0 || y > 2000) return
+    // ── 1. Build unified Fib level list from retracements ──
+    // Retracements come as { level: 0.236, price: 52444 }
+    // We also need 0.0 (wave high) and 1.0 (wave low) as anchors
+    if (retracements.length === 0 && targets.length === 0) return
 
-      const color = t.color || '#8b5cf6'
-      const isPrimary = t.type === 'primary'
-      const opacity = isPrimary ? 0.2 : 0.12
-      const lineOpacity = isPrimary ? 0.7 : 0.4
-      const zoneHeight = isPrimary ? 16 : 10
+    // Find anchor prices: 0.0 = highest target or first retracement extrapolated, 1.0 = invalidation or lowest
+    let price0 = null  // 0% level (wave high)
+    let price100 = null // 100% level (wave low)
 
-      // Target zone rectangle (pulsing)
-      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-      rect.setAttribute('x', chartWidth * 0.6)
-      rect.setAttribute('y', y - zoneHeight / 2)
-      rect.setAttribute('width', chartWidth * 0.4)
-      rect.setAttribute('height', zoneHeight)
-      rect.setAttribute('rx', '2')
-      rect.setAttribute('fill', color)
-      rect.setAttribute('opacity', opacity)
-      if (isPrimary) {
-        const anim = document.createElementNS('http://www.w3.org/2000/svg', 'animate')
-        anim.setAttribute('attributeName', 'opacity')
-        anim.setAttribute('values', `${opacity};${opacity * 2};${opacity}`)
-        anim.setAttribute('dur', '2s')
-        anim.setAttribute('repeatCount', 'indefinite')
-        rect.appendChild(anim)
+    // Extract from retracements: if we have 0.236 and 0.382, we can derive 0% and 100%
+    if (retracements.length >= 2) {
+      const r1 = retracements[0]
+      const r2 = retracements[1]
+      // price = high - level * (high - low)  →  high = (price - level*low) / (1-level)
+      // Using two points: high = (r2.price * r1.level - r1.price * r2.level) / (r1.level - r2.level)
+      const denom = r1.level - r2.level
+      if (Math.abs(denom) > 0.001) {
+        price0 = (r2.price * r1.level - r1.price * r2.level) / denom
+        price100 = price0 - (r1.price - price0) / (-r1.level) * 1  // low = high - range
+        // Simpler: range = (r1.price - price0) / (-r1.level)
+        const range = (price0 - r1.price) / r1.level
+        price100 = price0 - range
       }
-      svg.appendChild(rect)
+    }
 
-      // Dashed target line
-      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
-      line.setAttribute('x1', chartWidth * 0.4)
-      line.setAttribute('y1', y)
-      line.setAttribute('x2', chartWidth)
-      line.setAttribute('y2', y)
-      line.setAttribute('stroke', color)
-      line.setAttribute('stroke-width', isPrimary ? '1.5' : '1')
-      line.setAttribute('stroke-dasharray', '6 4')
-      line.setAttribute('opacity', lineOpacity)
-      svg.appendChild(line)
+    // Fallback: use invalidation as 1.0
+    if (!price100 && invalidation) price100 = invalidation.price
+    // Fallback: use target prices
+    if (!price0 && targets.length > 0) {
+      price0 = Math.max(...targets.map(t => t.price))
+    }
 
-      // Price badge on right edge
-      const badgeW = 65
+    if (!price0 || !price100) return
+    const range = price0 - price100
+
+    // ── 2. Create native price lines for Fib retracement levels ──
+    const fibLevels = [
+      { level: 0,     label: '0.000', price: price0,   lineWidth: 1, lineStyle: 0, opacity: 0.4 },
+      { level: 0.236, label: '0.236', price: null,      lineWidth: 1, lineStyle: 2, opacity: 0.2 },
+      { level: 0.382, label: '0.382', price: null,      lineWidth: 1, lineStyle: 2, opacity: 0.3 },
+      { level: 0.5,   label: '0.500', price: null,      lineWidth: 1, lineStyle: 2, opacity: 0.35 },
+      { level: 0.618, label: '0.618', price: null,      lineWidth: 2, lineStyle: 2, opacity: 0.5, bright: true },
+      { level: 0.786, label: '0.786', price: null,      lineWidth: 1, lineStyle: 2, opacity: 0.25 },
+      { level: 1.0,   label: '1.000', price: price100,  lineWidth: 1, lineStyle: 0, opacity: 0.4 },
+    ]
+
+    // Fill in prices from retracements or calculate from range
+    for (const fl of fibLevels) {
+      if (fl.price !== null) continue
+      const match = retracements.find(r => Math.abs(r.level - fl.level) < 0.01)
+      fl.price = match ? match.price : price0 - fl.level * range
+    }
+
+    // Create native price lines
+    for (const fl of fibLevels) {
+      if (!fl.price || !isFinite(fl.price)) continue
+      const color = fl.bright ? FIB_BRIGHT_HEX : FIB_GOLD_HEX
+      try {
+        const pl = candleSeriesRef.value.createPriceLine({
+          price: fl.price,
+          color: color,
+          lineWidth: fl.lineWidth,
+          lineStyle: fl.lineStyle, // 0=solid, 2=dashed
+          axisLabelVisible: true,
+          title: fl.label,
+          lineVisible: true,
+        })
+        fibPriceLines.push(pl)
+      } catch { /* price line creation may fail if chart not ready */ }
+    }
+
+    // ── 3. Extension levels as dotted price lines ──
+    // Find extension targets from fibTargets (Wave 5 targets, etc.)
+    const extensionLevels = [
+      { level: 1.272, price: price0 - 1.272 * range },
+      { level: 1.618, price: price0 - 1.618 * range },
+    ]
+    // Override with actual fibTargets if available (more accurate)
+    for (const ft of fibTargets) {
+      if (ft.fib === 1.618 && ft.wave === '3') {
+        const idx = extensionLevels.findIndex(e => e.level === 1.618)
+        if (idx !== -1) extensionLevels[idx].price = ft.price
+      }
+    }
+
+    for (const ext of extensionLevels) {
+      if (!ext.price || !isFinite(ext.price)) continue
+      try {
+        const pl = candleSeriesRef.value.createPriceLine({
+          price: ext.price,
+          color: FIB_DIM_HEX,
+          lineWidth: 1,
+          lineStyle: 3, // dotted
+          axisLabelVisible: true,
+          title: `${ext.level.toFixed(3)} Ext`,
+          lineVisible: true,
+        })
+        fibPriceLines.push(pl)
+      } catch { /* ignore */ }
+    }
+
+    // ── 4. SVG overlay: OTE zone (0.618–0.786) + Golden Pocket (0.5–0.618) ──
+    const fib618 = fibLevels.find(f => f.level === 0.618)
+    const fib786 = fibLevels.find(f => f.level === 0.786)
+    const fib500 = fibLevels.find(f => f.level === 0.5)
+
+    // Golden Pocket zone (0.5 → 0.618)
+    if (fib500 && fib618) {
+      const y500 = getY(fib500.price)
+      const y618 = getY(fib618.price)
+      if (y500 !== null && y618 !== null) {
+        const yTop = Math.min(y500, y618)
+        const yBot = Math.max(y500, y618)
+        const zoneH = yBot - yTop
+
+        if (zoneH > 2 && zoneH < 500) {
+          // Shaded zone
+          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+          rect.setAttribute('x', '0')
+          rect.setAttribute('y', yTop)
+          rect.setAttribute('width', chartWidth - 70)
+          rect.setAttribute('height', zoneH)
+          rect.setAttribute('fill', FIB_GOLD + '0.04)')
+          svg.appendChild(rect)
+
+          // "GOLDEN POCKET" label (right-aligned, inside zone)
+          const gpLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+          gpLabel.setAttribute('x', chartWidth - 80)
+          gpLabel.setAttribute('y', yTop + zoneH / 2 + 3)
+          gpLabel.setAttribute('text-anchor', 'end')
+          gpLabel.setAttribute('fill', FIB_GOLD + '0.3)')
+          gpLabel.setAttribute('font-size', '7')
+          gpLabel.setAttribute('font-weight', '800')
+          gpLabel.setAttribute('letter-spacing', '1')
+          gpLabel.textContent = 'GOLDEN POCKET'
+          svg.appendChild(gpLabel)
+        }
+      }
+    }
+
+    // OTE zone (0.618 → 0.786)
+    if (fib618 && fib786) {
+      const y618 = getY(fib618.price)
+      const y786 = getY(fib786.price)
+      if (y618 !== null && y786 !== null) {
+        const yTop = Math.min(y618, y786)
+        const yBot = Math.max(y618, y786)
+        const zoneH = yBot - yTop
+
+        if (zoneH > 2 && zoneH < 500) {
+          // Shaded zone
+          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+          rect.setAttribute('x', '0')
+          rect.setAttribute('y', yTop)
+          rect.setAttribute('width', chartWidth - 70)
+          rect.setAttribute('height', zoneH)
+          rect.setAttribute('fill', FIB_GOLD + '0.05)')
+          rect.setAttribute('stroke', FIB_GOLD + '0.12)')
+          rect.setAttribute('stroke-width', '0.5')
+          svg.appendChild(rect)
+
+          // Left edge accent bar
+          const accent = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+          accent.setAttribute('x', '0')
+          accent.setAttribute('y', yTop)
+          accent.setAttribute('width', '2')
+          accent.setAttribute('height', zoneH)
+          accent.setAttribute('fill', FIB_GOLD + '0.2)')
+          svg.appendChild(accent)
+
+          // "OTE" label
+          const oteLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+          oteLabel.setAttribute('x', '8')
+          oteLabel.setAttribute('y', yTop + zoneH / 2 + 3)
+          oteLabel.setAttribute('fill', FIB_GOLD + '0.35)')
+          oteLabel.setAttribute('font-size', '7')
+          oteLabel.setAttribute('font-weight', '800')
+          oteLabel.setAttribute('letter-spacing', '1')
+          oteLabel.textContent = 'OTE ZONE'
+          svg.appendChild(oteLabel)
+        }
+      }
+    }
+
+    // ── 5. SVG: Extension target zones (right-side pulsing badges) ──
+    for (const ext of extensionLevels) {
+      const y = getY(ext.price)
+      if (y === null || y < 0 || y > 2000) continue
+
+      // Find matching fibTarget for label
+      const ftMatch = fibTargets.find(ft => Math.abs(ft.price - ext.price) < 1)
+      const label = ftMatch ? ftMatch.label : `Ext ${ext.level.toFixed(3)}`
+
+      // Right-side target badge
+      const badgeW = 120
       const badgeH = 14
-      const badgeX = chartWidth - badgeW - 4
+      const badgeX = chartWidth - 70 - badgeW - 8
       const badgeY = y - badgeH / 2
 
       const badge = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
@@ -782,74 +949,44 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
       badge.setAttribute('y', badgeY)
       badge.setAttribute('width', badgeW)
       badge.setAttribute('height', badgeH)
-      badge.setAttribute('rx', '3')
-      badge.setAttribute('fill', color)
-      badge.setAttribute('opacity', '0.25')
-      badge.setAttribute('stroke', color)
+      badge.setAttribute('rx', '2')
+      badge.setAttribute('fill', FIB_GOLD + '0.06)')
+      badge.setAttribute('stroke', FIB_GOLD + '0.15)')
       badge.setAttribute('stroke-width', '0.5')
-      badge.setAttribute('stroke-opacity', '0.5')
+      // Pulse animation for primary extensions
+      const anim = document.createElementNS('http://www.w3.org/2000/svg', 'animate')
+      anim.setAttribute('attributeName', 'opacity')
+      anim.setAttribute('values', '0.7;1;0.7')
+      anim.setAttribute('dur', '2.5s')
+      anim.setAttribute('repeatCount', 'indefinite')
+      badge.appendChild(anim)
       svg.appendChild(badge)
 
-      const priceText = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-      priceText.setAttribute('x', badgeX + badgeW / 2)
-      priceText.setAttribute('y', y + 3.5)
-      priceText.setAttribute('text-anchor', 'middle')
-      priceText.setAttribute('fill', color)
-      priceText.setAttribute('font-size', '9')
-      priceText.setAttribute('font-weight', '700')
-      priceText.setAttribute('font-family', 'monospace')
-      priceText.textContent = parseFloat(t.price).toLocaleString('en-US', { maximumFractionDigits: 0 })
-      svg.appendChild(priceText)
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      text.setAttribute('x', badgeX + 6)
+      text.setAttribute('y', y + 3)
+      text.setAttribute('fill', FIB_DIM_HEX)
+      text.setAttribute('font-size', '7')
+      text.setAttribute('font-weight', '700')
+      text.setAttribute('font-family', 'monospace')
+      text.textContent = label
+      svg.appendChild(text)
+    }
 
-      // Label on left side of zone
-      const labelText = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-      labelText.setAttribute('x', chartWidth * 0.42)
-      labelText.setAttribute('y', y - zoneHeight / 2 - 2)
-      labelText.setAttribute('fill', color)
-      labelText.setAttribute('font-size', '7')
-      labelText.setAttribute('font-weight', '600')
-      labelText.setAttribute('opacity', '0.8')
-      labelText.textContent = t.label
-      svg.appendChild(labelText)
-    })
-
-    // Invalidation level (red dashed line)
+    // ── 6. Invalidation level (red dashed line — kept as SVG for warning label) ──
     if (invalidation) {
-      const invY = candleSeriesRef.value.priceToCoordinate(invalidation.price)
+      const invY = getY(invalidation.price)
       if (invY !== null && invY > 0 && invY < 2000) {
         const invLine = document.createElementNS('http://www.w3.org/2000/svg', 'line')
         invLine.setAttribute('x1', '0')
         invLine.setAttribute('y1', invY)
-        invLine.setAttribute('x2', chartWidth)
+        invLine.setAttribute('x2', chartWidth - 70)
         invLine.setAttribute('y2', invY)
         invLine.setAttribute('stroke', '#ef5350')
         invLine.setAttribute('stroke-width', '1')
         invLine.setAttribute('stroke-dasharray', '8 4')
         invLine.setAttribute('opacity', '0.5')
         svg.appendChild(invLine)
-
-        // Invalidation badge
-        const invBadge = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-        invBadge.setAttribute('x', chartWidth - 69)
-        invBadge.setAttribute('y', invY - 7)
-        invBadge.setAttribute('width', 65)
-        invBadge.setAttribute('height', 14)
-        invBadge.setAttribute('rx', '3')
-        invBadge.setAttribute('fill', 'rgba(239,83,80,0.2)')
-        invBadge.setAttribute('stroke', 'rgba(239,83,80,0.4)')
-        invBadge.setAttribute('stroke-width', '0.5')
-        svg.appendChild(invBadge)
-
-        const invText = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-        invText.setAttribute('x', chartWidth - 36)
-        invText.setAttribute('y', invY + 3.5)
-        invText.setAttribute('text-anchor', 'middle')
-        invText.setAttribute('fill', '#ef5350')
-        invText.setAttribute('font-size', '9')
-        invText.setAttribute('font-weight', '700')
-        invText.setAttribute('font-family', 'monospace')
-        invText.textContent = parseFloat(invalidation.price).toLocaleString('en-US', { maximumFractionDigits: 0 })
-        svg.appendChild(invText)
 
         // Warning label
         const warnLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text')
@@ -863,31 +1000,6 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
         svg.appendChild(warnLabel)
       }
     }
-
-    // Retracement lines (subtle between last 2 waves)
-    retracements.forEach(r => {
-      const y = candleSeriesRef.value.priceToCoordinate(r.price)
-      if (y === null || y < 0 || y > 2000) return
-
-      const retLine = document.createElementNS('http://www.w3.org/2000/svg', 'line')
-      retLine.setAttribute('x1', chartWidth * 0.3)
-      retLine.setAttribute('y1', y)
-      retLine.setAttribute('x2', chartWidth * 0.6)
-      retLine.setAttribute('y2', y)
-      retLine.setAttribute('stroke', 'rgba(139,92,246,0.15)')
-      retLine.setAttribute('stroke-width', '1')
-      retLine.setAttribute('stroke-dasharray', '3 3')
-      svg.appendChild(retLine)
-
-      const retLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-      retLabel.setAttribute('x', chartWidth * 0.3 + 2)
-      retLabel.setAttribute('y', y - 2)
-      retLabel.setAttribute('fill', '#555')
-      retLabel.setAttribute('font-size', '7')
-      retLabel.setAttribute('font-family', 'monospace')
-      retLabel.textContent = `${(r.level * 100).toFixed(1)}%`
-      svg.appendChild(retLabel)
-    })
   }
 
 
@@ -944,6 +1056,7 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
 
   // ── Cleanup ──
   function cleanup() {
+    cleanupFibLines()
     if (svgOverlay.value) {
       svgOverlay.value.remove()
       svgOverlay.value = null

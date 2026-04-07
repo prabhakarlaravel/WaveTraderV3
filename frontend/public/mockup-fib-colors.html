@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Fibonacci Color Schemes — No Overlap</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0f1729; color: #e2e8f0; font-family: 'Inter', -apple-system, sans-serif; }
+
+  .page-title {
+    text-align: center; padding: 20px; font-size: 13px; color: #64748b;
+    border-bottom: 1px solid #1e293b;
+  }
+  .page-title h1 { font-size: 18px; color: #e2e8f0; margin-bottom: 4px; }
+
+  .used-colors {
+    max-width: 900px; margin: 20px auto; padding: 10px 20px;
+    background: rgba(30,41,59,0.5); border-radius: 8px; border: 1px solid #334155;
+  }
+  .used-colors h3 { font-size: 10px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 8px; }
+  .color-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    display: flex; align-items: center; gap: 5px;
+    padding: 3px 8px; border-radius: 4px; font-size: 9px; font-weight: 600;
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+  }
+  .chip-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+  .demo-section { max-width: 900px; margin: 30px auto; padding: 0 20px; }
+  .demo-label {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 2px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;
+  }
+  .demo-label .tag {
+    font-size: 9px; padding: 2px 8px; border-radius: 4px; font-weight: 800;
+  }
+  .demo-desc { font-size: 12px; color: #64748b; margin-bottom: 16px; line-height: 1.6; }
+  .separator { height: 1px; background: #1e293b; margin: 30px 0; }
+
+  /* Chart mock */
+  .chart-mock {
+    position: relative; height: 420px; background: #1a2540;
+    border-radius: 12px; border: 1px solid #243354; overflow: hidden;
+  }
+  .chart-grid {
+    position: absolute; inset: 0;
+    background:
+      repeating-linear-gradient(90deg, transparent, transparent 80px, rgba(36,51,84,0.4) 80px, rgba(36,51,84,0.4) 81px),
+      repeating-linear-gradient(0deg, transparent, transparent 50px, rgba(36,51,84,0.25) 50px, rgba(36,51,84,0.25) 51px);
+  }
+
+  /* Existing overlay indicators (to show they don't clash) */
+  .existing-ob {
+    position: absolute; left: 5%; width: 25%; border-radius: 3px; opacity: 0.7;
+  }
+  .existing-vwap {
+    position: absolute; left: 10%; right: 80px; height: 0;
+    border-top: 1.5px solid; opacity: 0.5;
+  }
+  .existing-wave {
+    position: absolute; width: 12px; height: 12px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 7px; font-weight: 800; border: 1.5px solid;
+  }
+
+  /* Price scale */
+  .price-scale {
+    position: absolute; right: 0; top: 0; bottom: 0; width: 70px;
+    background: rgba(15, 23, 41, 0.9); border-left: 1px solid #243354;
+  }
+
+  /* Fib level template */
+  .fib-line {
+    position: absolute; left: 0; right: 70px; height: 0;
+    border-top: 1px dashed;
+  }
+  .fib-tag {
+    position: absolute; left: 6px; top: -9px;
+    font-size: 8px; font-weight: 700; font-family: monospace;
+    padding: 1px 5px; border-radius: 3px; white-space: nowrap;
+  }
+  .fib-px {
+    position: absolute; right: 4px; top: -8px;
+    font-size: 8px; font-weight: 700; font-family: monospace;
+    padding: 1px 5px; border-radius: 3px;
+  }
+  .fib-zone-fill {
+    position: absolute; left: 0; right: 70px; pointer-events: none;
+  }
+  .ext-tag {
+    position: absolute; left: 6px; top: -9px;
+    font-size: 7px; font-weight: 700; font-family: monospace;
+    padding: 1px 5px; border-radius: 3px; white-space: nowrap;
+  }
+
+  /* Zone label */
+  .zone-label {
+    position: absolute; left: 10px; font-size: 7px; font-weight: 800;
+    letter-spacing: 1px; text-transform: uppercase;
+    transform: translateY(-50%);
+  }
+</style>
+</head>
+<body>
+
+<div class="page-title">
+  <h1>Fibonacci Color Schemes — Avoiding Overlap</h1>
+  Each palette is tested against existing chart overlay colors
+</div>
+
+<!-- Currently used colors reference -->
+<div class="used-colors">
+  <h3>Currently Used Overlay Colors (must avoid)</h3>
+  <div class="color-chips">
+    <div class="chip"><div class="chip-dot" style="background:#8b5cf6"></div>Waves (purple)</div>
+    <div class="chip"><div class="chip-dot" style="background:#f59e0b"></div>Correction (orange)</div>
+    <div class="chip"><div class="chip-dot" style="background:#34d399"></div>Current wave (green)</div>
+    <div class="chip"><div class="chip-dot" style="background:#3b82f6"></div>OB Bull (blue)</div>
+    <div class="chip"><div class="chip-dot" style="background:#ec4899"></div>OB Bear / VWAP (pink)</div>
+    <div class="chip"><div class="chip-dot" style="background:#10b981"></div>BOS (green)</div>
+    <div class="chip"><div class="chip-dot" style="background:#f97316"></div>CHOCH (orange)</div>
+    <div class="chip"><div class="chip-dot" style="background:#22d3ee"></div>Sub-legs (cyan)</div>
+    <div class="chip"><div class="chip-dot" style="background:#ef5350"></div>Invalidation (red)</div>
+    <div class="chip"><div class="chip-dot" style="background:#00dc82"></div>Buy signal (green)</div>
+    <div class="chip"><div class="chip-dot" style="background:#ff3b5c"></div>Sell signal (red)</div>
+  </div>
+</div>
+
+<!-- ══════════ PALETTE 1: WARM GOLD MONOCHROME ══════════ -->
+<div class="demo-section">
+  <div class="demo-label" style="color: #d4a054;">
+    Palette 1 — Warm Gold Monochrome
+    <span class="tag" style="background:rgba(212,160,84,0.15);color:#d4a054;">Single Hue</span>
+  </div>
+  <div class="demo-desc">
+    All Fib levels use a single warm gold/amber hue at varying opacities. Clean, distinct from all existing overlays.
+    OTE zone gets a slightly brighter shade. Extensions use a dimmer tone. No color confusion possible.
+  </div>
+
+  <div class="chart-mock">
+    <div class="chart-grid"></div>
+    <!-- Existing overlays for reference -->
+    <div class="existing-ob" style="top:15%;height:30px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.3);"></div>
+    <div class="existing-ob" style="top:65%;height:25px;background:rgba(236,72,153,0.1);border:1px solid rgba(236,72,153,0.3);"></div>
+    <div class="existing-vwap" style="top:40%;border-color:#ec4899;"></div>
+    <div class="existing-wave" style="top:8%;left:40%;background:rgba(139,92,246,0.2);border-color:#8b5cf6;color:#a78bfa;">3</div>
+    <div class="existing-wave" style="top:82%;left:15%;background:rgba(139,92,246,0.2);border-color:#8b5cf6;color:#a78bfa;">2</div>
+
+    <!-- Fib levels — warm gold -->
+    <div class="fib-line" style="top:8%;border-color:rgba(212,160,84,0.5);">
+      <div class="fib-tag" style="color:#d4a054;background:rgba(212,160,84,0.12);">0.000</div>
+      <div class="fib-px" style="color:#d4a054;background:rgba(212,160,84,0.1);">52,908</div>
+    </div>
+    <div class="fib-line" style="top:20%;border-color:rgba(212,160,84,0.25);">
+      <div class="fib-tag" style="color:#c89545;background:rgba(212,160,84,0.08);">0.236</div>
+      <div class="fib-px" style="color:#c89545;background:rgba(212,160,84,0.06);">52,444</div>
+    </div>
+    <div class="fib-line" style="top:32%;border-color:rgba(212,160,84,0.35);">
+      <div class="fib-tag" style="color:#d4a054;background:rgba(212,160,84,0.1);">0.382</div>
+      <div class="fib-px" style="color:#d4a054;background:rgba(212,160,84,0.08);">52,350</div>
+    </div>
+    <div class="fib-line" style="top:44%;border-color:rgba(212,160,84,0.45);">
+      <div class="fib-tag" style="color:#e0b060;background:rgba(212,160,84,0.12);">0.500</div>
+      <div class="fib-px" style="color:#e0b060;background:rgba(212,160,84,0.1);">52,274</div>
+    </div>
+    <!-- Golden ratio — emphasized -->
+    <div class="fib-line" style="top:55%;border-color:rgba(230,180,80,0.6);border-top-width:1.5px;">
+      <div class="fib-tag" style="color:#e6b450;background:rgba(230,180,80,0.15);font-size:9px;">0.618</div>
+      <div class="fib-px" style="color:#e6b450;background:rgba(230,180,80,0.12);">52,197</div>
+    </div>
+    <div class="fib-line" style="top:67%;border-color:rgba(212,160,84,0.35);">
+      <div class="fib-tag" style="color:#d4a054;background:rgba(212,160,84,0.1);">0.786</div>
+      <div class="fib-px" style="color:#d4a054;background:rgba(212,160,84,0.08);">52,089</div>
+    </div>
+    <div class="fib-line" style="top:82%;border-color:rgba(212,160,84,0.5);">
+      <div class="fib-tag" style="color:#d4a054;background:rgba(212,160,84,0.12);">1.000</div>
+      <div class="fib-px" style="color:#d4a054;background:rgba(212,160,84,0.1);">51,951</div>
+    </div>
+    <!-- Extensions -->
+    <div class="fib-line" style="top:89%;border-color:rgba(212,160,84,0.2);border-top-style:dotted;">
+      <div class="ext-tag" style="color:#b08840;background:rgba(212,160,84,0.06);">1.272 Ext</div>
+    </div>
+    <div class="fib-line" style="top:95%;border-color:rgba(212,160,84,0.25);border-top-style:dotted;">
+      <div class="ext-tag" style="color:#b08840;background:rgba(212,160,84,0.08);">1.618 Ext</div>
+    </div>
+    <!-- OTE zone -->
+    <div class="fib-zone-fill" style="top:55%;height:12%;background:linear-gradient(180deg,rgba(212,160,84,0.06),rgba(212,160,84,0.03));">
+      <div class="zone-label" style="top:50%;color:rgba(212,160,84,0.4);">OTE</div>
+    </div>
+
+    <div class="price-scale"></div>
+  </div>
+</div>
+
+<div class="separator"></div>
+
+<!-- ══════════ PALETTE 2: ICE BLUE / SILVER ══════════ -->
+<div class="demo-section">
+  <div class="demo-label" style="color: #7dd3fc;">
+    Palette 2 — Ice Blue / Silver
+    <span class="tag" style="background:rgba(125,211,252,0.15);color:#7dd3fc;">Cool Tone</span>
+  </div>
+  <div class="demo-desc">
+    Light blue-silver palette. Distinct from the existing blue (#3b82f6 OB) by being lighter/more silvery.
+    Subtle and professional. Golden ratio highlighted with slightly warmer accent.
+  </div>
+
+  <div class="chart-mock">
+    <div class="chart-grid"></div>
+    <div class="existing-ob" style="top:15%;height:30px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.3);"></div>
+    <div class="existing-ob" style="top:65%;height:25px;background:rgba(236,72,153,0.1);border:1px solid rgba(236,72,153,0.3);"></div>
+    <div class="existing-vwap" style="top:40%;border-color:#ec4899;"></div>
+    <div class="existing-wave" style="top:8%;left:40%;background:rgba(139,92,246,0.2);border-color:#8b5cf6;color:#a78bfa;">3</div>
+    <div class="existing-wave" style="top:82%;left:15%;background:rgba(139,92,246,0.2);border-color:#8b5cf6;color:#a78bfa;">2</div>
+
+    <!-- Fib levels — ice blue -->
+    <div class="fib-line" style="top:8%;border-color:rgba(148,185,215,0.45);">
+      <div class="fib-tag" style="color:#94b9d7;background:rgba(148,185,215,0.1);">0.000</div>
+      <div class="fib-px" style="color:#94b9d7;background:rgba(148,185,215,0.08);">52,908</div>
+    </div>
+    <div class="fib-line" style="top:20%;border-color:rgba(148,185,215,0.2);">
+      <div class="fib-tag" style="color:#7ea8c8;background:rgba(148,185,215,0.06);">0.236</div>
+      <div class="fib-px" style="color:#7ea8c8;background:rgba(148,185,215,0.05);">52,444</div>
+    </div>
+    <div class="fib-line" style="top:32%;border-color:rgba(148,185,215,0.3);">
+      <div class="fib-tag" style="color:#94b9d7;background:rgba(148,185,215,0.08);">0.382</div>
+      <div class="fib-px" style="color:#94b9d7;background:rgba(148,185,215,0.06);">52,350</div>
+    </div>
+    <div class="fib-line" style="top:44%;border-color:rgba(148,185,215,0.4);">
+      <div class="fib-tag" style="color:#a8c8e0;background:rgba(148,185,215,0.1);">0.500</div>
+      <div class="fib-px" style="color:#a8c8e0;background:rgba(148,185,215,0.08);">52,274</div>
+    </div>
+    <!-- 0.618 — warm accent -->
+    <div class="fib-line" style="top:55%;border-color:rgba(186,160,120,0.5);border-top-width:1.5px;">
+      <div class="fib-tag" style="color:#c8b080;background:rgba(186,160,120,0.12);font-size:9px;">0.618</div>
+      <div class="fib-px" style="color:#c8b080;background:rgba(186,160,120,0.1);">52,197</div>
+    </div>
+    <div class="fib-line" style="top:67%;border-color:rgba(148,185,215,0.3);">
+      <div class="fib-tag" style="color:#94b9d7;background:rgba(148,185,215,0.08);">0.786</div>
+      <div class="fib-px" style="color:#94b9d7;background:rgba(148,185,215,0.06);">52,089</div>
+    </div>
+    <div class="fib-line" style="top:82%;border-color:rgba(148,185,215,0.45);">
+      <div class="fib-tag" style="color:#94b9d7;background:rgba(148,185,215,0.1);">1.000</div>
+      <div class="fib-px" style="color:#94b9d7;background:rgba(148,185,215,0.08);">51,951</div>
+    </div>
+    <div class="fib-line" style="top:89%;border-color:rgba(148,185,215,0.15);border-top-style:dotted;">
+      <div class="ext-tag" style="color:#7ea8c8;background:rgba(148,185,215,0.05);">1.272 Ext</div>
+    </div>
+    <div class="fib-line" style="top:95%;border-color:rgba(148,185,215,0.2);border-top-style:dotted;">
+      <div class="ext-tag" style="color:#7ea8c8;background:rgba(148,185,215,0.06);">1.618 Ext</div>
+    </div>
+    <div class="fib-zone-fill" style="top:55%;height:12%;background:linear-gradient(180deg,rgba(186,160,120,0.05),rgba(148,185,215,0.03));">
+      <div class="zone-label" style="top:50%;color:rgba(186,160,120,0.35);">OTE</div>
+    </div>
+
+    <div class="price-scale"></div>
+  </div>
+</div>
+
+<div class="separator"></div>
+
+<!-- ══════════ PALETTE 3: CORAL / ROSE ══════════ -->
+<div class="demo-section">
+  <div class="demo-label" style="color: #f0a0a0;">
+    Palette 3 — Coral / Rose
+    <span class="tag" style="background:rgba(240,160,160,0.15);color:#f0a0a0;">Warm</span>
+  </div>
+  <div class="demo-desc">
+    Soft coral/salmon tones — distinct from the existing red (#ef5350 invalidation) and pink (#ec4899 OB/VWAP)
+    by being warmer and more muted. Golden ratio gets a brighter coral accent.
+  </div>
+
+  <div class="chart-mock">
+    <div class="chart-grid"></div>
+    <div class="existing-ob" style="top:15%;height:30px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.3);"></div>
+    <div class="existing-ob" style="top:65%;height:25px;background:rgba(236,72,153,0.1);border:1px solid rgba(236,72,153,0.3);"></div>
+    <div class="existing-vwap" style="top:40%;border-color:#ec4899;"></div>
+    <div class="existing-wave" style="top:8%;left:40%;background:rgba(139,92,246,0.2);border-color:#8b5cf6;color:#a78bfa;">3</div>
+    <div class="existing-wave" style="top:82%;left:15%;background:rgba(139,92,246,0.2);border-color:#8b5cf6;color:#a78bfa;">2</div>
+
+    <div class="fib-line" style="top:8%;border-color:rgba(210,140,130,0.5);">
+      <div class="fib-tag" style="color:#d28c82;background:rgba(210,140,130,0.12);">0.000</div>
+      <div class="fib-px" style="color:#d28c82;background:rgba(210,140,130,0.1);">52,908</div>
+    </div>
+    <div class="fib-line" style="top:20%;border-color:rgba(210,140,130,0.25);">
+      <div class="fib-tag" style="color:#c08078;background:rgba(210,140,130,0.06);">0.236</div>
+      <div class="fib-px" style="color:#c08078;background:rgba(210,140,130,0.05);">52,444</div>
+    </div>
+    <div class="fib-line" style="top:32%;border-color:rgba(210,140,130,0.35);">
+      <div class="fib-tag" style="color:#d28c82;background:rgba(210,140,130,0.08);">0.382</div>
+      <div class="fib-px" style="color:#d28c82;background:rgba(210,140,130,0.06);">52,350</div>
+    </div>
+    <div class="fib-line" style="top:44%;border-color:rgba(210,140,130,0.4);">
+      <div class="fib-tag" style="color:#daa098;background:rgba(210,140,130,0.1);">0.500</div>
+      <div class="fib-px" style="color:#daa098;background:rgba(210,140,130,0.08);">52,274</div>
+    </div>
+    <div class="fib-line" style="top:55%;border-color:rgba(230,120,100,0.55);border-top-width:1.5px;">
+      <div class="fib-tag" style="color:#e67864;background:rgba(230,120,100,0.14);font-size:9px;">0.618</div>
+      <div class="fib-px" style="color:#e67864;background:rgba(230,120,100,0.12);">52,197</div>
+    </div>
+    <div class="fib-line" style="top:67%;border-color:rgba(210,140,130,0.3);">
+      <div class="fib-tag" style="color:#d28c82;background:rgba(210,140,130,0.08);">0.786</div>
+      <div class="fib-px" style="color:#d28c82;background:rgba(210,140,130,0.06);">52,089</div>
+    </div>
+    <div class="fib-line" style="top:82%;border-color:rgba(210,140,130,0.5);">
+      <div class="fib-tag" style="color:#d28c82;background:rgba(210,140,130,0.12);">1.000</div>
+      <div class="fib-px" style="color:#d28c82;background:rgba(210,140,130,0.1);">51,951</div>
+    </div>
+    <div class="fib-line" style="top:89%;border-color:rgba(210,140,130,0.18);border-top-style:dotted;">
+      <div class="ext-tag" style="color:#b07870;background:rgba(210,140,130,0.05);">1.272 Ext</div>
+    </div>
+    <div class="fib-line" style="top:95%;border-color:rgba(210,140,130,0.22);border-top-style:dotted;">
+      <div class="ext-tag" style="color:#b07870;background:rgba(210,140,130,0.06);">1.618 Ext</div>
+    </div>
+    <div class="fib-zone-fill" style="top:55%;height:12%;background:linear-gradient(180deg,rgba(230,120,100,0.06),rgba(210,140,130,0.02));">
+      <div class="zone-label" style="top:50%;color:rgba(230,120,100,0.4);">OTE</div>
+    </div>
+
+    <div class="price-scale"></div>
+  </div>
+</div>
+
+<div class="separator"></div>
+
+<!-- ══════════ PALETTE 4: MINT / TEAL (different from existing greens) ══════════ -->
+<div class="demo-section">
+  <div class="demo-label" style="color: #5eead4;">
+    Palette 4 — Mint / Teal Gradient
+    <span class="tag" style="background:rgba(94,234,212,0.15);color:#5eead4;">Fresh</span>
+  </div>
+  <div class="demo-desc">
+    Teal-to-white gradient. Uses a different hue from existing greens (#34d399/#10b981) — more blue-shifted.
+    0.618 gets a warm gold accent for emphasis. Extensions fade to a cooler tone.
+  </div>
+
+  <div class="chart-mock">
+    <div class="chart-grid"></div>
+    <div class="existing-ob" style="top:15%;height:30px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.3);"></div>
+    <div class="existing-ob" style="top:65%;height:25px;background:rgba(236,72,153,0.1);border:1px solid rgba(236,72,153,0.3);"></div>
+    <div class="existing-vwap" style="top:40%;border-color:#ec4899;"></div>
+    <div class="existing-wave" style="top:8%;left:40%;background:rgba(139,92,246,0.2);border-color:#8b5cf6;color:#a78bfa;">3</div>
+    <div class="existing-wave" style="top:82%;left:15%;background:rgba(139,92,246,0.2);border-color:#8b5cf6;color:#a78bfa;">2</div>
+
+    <div class="fib-line" style="top:8%;border-color:rgba(94,234,212,0.4);">
+      <div class="fib-tag" style="color:#5eead4;background:rgba(94,234,212,0.1);">0.000</div>
+      <div class="fib-px" style="color:#5eead4;background:rgba(94,234,212,0.08);">52,908</div>
+    </div>
+    <div class="fib-line" style="top:20%;border-color:rgba(94,234,212,0.18);">
+      <div class="fib-tag" style="color:#4ac8b4;background:rgba(94,234,212,0.05);">0.236</div>
+      <div class="fib-px" style="color:#4ac8b4;background:rgba(94,234,212,0.04);">52,444</div>
+    </div>
+    <div class="fib-line" style="top:32%;border-color:rgba(94,234,212,0.28);">
+      <div class="fib-tag" style="color:#5eead4;background:rgba(94,234,212,0.07);">0.382</div>
+      <div class="fib-px" style="color:#5eead4;background:rgba(94,234,212,0.05);">52,350</div>
+    </div>
+    <div class="fib-line" style="top:44%;border-color:rgba(94,234,212,0.35);">
+      <div class="fib-tag" style="color:#70f0de;background:rgba(94,234,212,0.09);">0.500</div>
+      <div class="fib-px" style="color:#70f0de;background:rgba(94,234,212,0.07);">52,274</div>
+    </div>
+    <!-- 0.618 — gold accent -->
+    <div class="fib-line" style="top:55%;border-color:rgba(220,175,80,0.5);border-top-width:1.5px;">
+      <div class="fib-tag" style="color:#dcaf50;background:rgba(220,175,80,0.12);font-size:9px;">0.618</div>
+      <div class="fib-px" style="color:#dcaf50;background:rgba(220,175,80,0.1);">52,197</div>
+    </div>
+    <div class="fib-line" style="top:67%;border-color:rgba(94,234,212,0.25);">
+      <div class="fib-tag" style="color:#5eead4;background:rgba(94,234,212,0.07);">0.786</div>
+      <div class="fib-px" style="color:#5eead4;background:rgba(94,234,212,0.05);">52,089</div>
+    </div>
+    <div class="fib-line" style="top:82%;border-color:rgba(94,234,212,0.4);">
+      <div class="fib-tag" style="color:#5eead4;background:rgba(94,234,212,0.1);">1.000</div>
+      <div class="fib-px" style="color:#5eead4;background:rgba(94,234,212,0.08);">51,951</div>
+    </div>
+    <div class="fib-line" style="top:89%;border-color:rgba(94,234,212,0.12);border-top-style:dotted;">
+      <div class="ext-tag" style="color:#4ac8b4;background:rgba(94,234,212,0.04);">1.272 Ext</div>
+    </div>
+    <div class="fib-line" style="top:95%;border-color:rgba(94,234,212,0.16);border-top-style:dotted;">
+      <div class="ext-tag" style="color:#4ac8b4;background:rgba(94,234,212,0.05);">1.618 Ext</div>
+    </div>
+    <div class="fib-zone-fill" style="top:55%;height:12%;background:linear-gradient(180deg,rgba(220,175,80,0.05),rgba(94,234,212,0.03));">
+      <div class="zone-label" style="top:50%;color:rgba(220,175,80,0.35);">OTE</div>
+    </div>
+
+    <div class="price-scale"></div>
+  </div>
+</div>
+
+<div class="separator"></div>
+
+<!-- ══════════ PALETTE 5: WHITE / NEUTRAL (TradingView default) ══════════ -->
+<div class="demo-section" style="margin-bottom: 60px;">
+  <div class="demo-label" style="color: #94a3b8;">
+    Palette 5 — Neutral White / Gray
+    <span class="tag" style="background:rgba(148,163,184,0.15);color:#94a3b8;">Classic</span>
+    <span class="tag" style="background:rgba(251,191,36,0.15);color:#fbbf24;">TradingView Style</span>
+  </div>
+  <div class="demo-desc">
+    Neutral white/gray like TradingView's default Fib tool. 0.618 and 0.5 get golden highlights.
+    Maximum contrast on dark background. Zero risk of clashing with any colored overlay.
+  </div>
+
+  <div class="chart-mock">
+    <div class="chart-grid"></div>
+    <div class="existing-ob" style="top:15%;height:30px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.3);"></div>
+    <div class="existing-ob" style="top:65%;height:25px;background:rgba(236,72,153,0.1);border:1px solid rgba(236,72,153,0.3);"></div>
+    <div class="existing-vwap" style="top:40%;border-color:#ec4899;"></div>
+    <div class="existing-wave" style="top:8%;left:40%;background:rgba(139,92,246,0.2);border-color:#8b5cf6;color:#a78bfa;">3</div>
+    <div class="existing-wave" style="top:82%;left:15%;background:rgba(139,92,246,0.2);border-color:#8b5cf6;color:#a78bfa;">2</div>
+
+    <div class="fib-line" style="top:8%;border-color:rgba(226,232,240,0.35);">
+      <div class="fib-tag" style="color:#94a3b8;background:rgba(226,232,240,0.08);">0.000</div>
+      <div class="fib-px" style="color:#94a3b8;background:rgba(226,232,240,0.06);">52,908</div>
+    </div>
+    <div class="fib-line" style="top:20%;border-color:rgba(226,232,240,0.15);">
+      <div class="fib-tag" style="color:#64748b;background:rgba(226,232,240,0.04);">0.236</div>
+      <div class="fib-px" style="color:#64748b;background:rgba(226,232,240,0.03);">52,444</div>
+    </div>
+    <div class="fib-line" style="top:32%;border-color:rgba(226,232,240,0.22);">
+      <div class="fib-tag" style="color:#94a3b8;background:rgba(226,232,240,0.06);">0.382</div>
+      <div class="fib-px" style="color:#94a3b8;background:rgba(226,232,240,0.05);">52,350</div>
+    </div>
+    <!-- 0.5 — subtle gold -->
+    <div class="fib-line" style="top:44%;border-color:rgba(200,180,120,0.35);">
+      <div class="fib-tag" style="color:#c8b478;background:rgba(200,180,120,0.08);">0.500</div>
+      <div class="fib-px" style="color:#c8b478;background:rgba(200,180,120,0.06);">52,274</div>
+    </div>
+    <!-- 0.618 — golden highlight -->
+    <div class="fib-line" style="top:55%;border-color:rgba(220,180,80,0.55);border-top-width:1.5px;">
+      <div class="fib-tag" style="color:#dcb450;background:rgba(220,180,80,0.14);font-size:9px;">0.618</div>
+      <div class="fib-px" style="color:#dcb450;background:rgba(220,180,80,0.12);">52,197</div>
+    </div>
+    <div class="fib-line" style="top:67%;border-color:rgba(226,232,240,0.2);">
+      <div class="fib-tag" style="color:#94a3b8;background:rgba(226,232,240,0.06);">0.786</div>
+      <div class="fib-px" style="color:#94a3b8;background:rgba(226,232,240,0.05);">52,089</div>
+    </div>
+    <div class="fib-line" style="top:82%;border-color:rgba(226,232,240,0.35);">
+      <div class="fib-tag" style="color:#94a3b8;background:rgba(226,232,240,0.08);">1.000</div>
+      <div class="fib-px" style="color:#94a3b8;background:rgba(226,232,240,0.06);">51,951</div>
+    </div>
+    <div class="fib-line" style="top:89%;border-color:rgba(226,232,240,0.1);border-top-style:dotted;">
+      <div class="ext-tag" style="color:#64748b;background:rgba(226,232,240,0.03);">1.272 Ext</div>
+    </div>
+    <div class="fib-line" style="top:95%;border-color:rgba(226,232,240,0.14);border-top-style:dotted;">
+      <div class="ext-tag" style="color:#64748b;background:rgba(226,232,240,0.04);">1.618 Ext</div>
+    </div>
+    <!-- Golden pocket zone -->
+    <div class="fib-zone-fill" style="top:44%;height:11%;background:linear-gradient(180deg,rgba(220,180,80,0.03),rgba(220,180,80,0.05));">
+      <div class="zone-label" style="top:50%;color:rgba(220,180,80,0.3);">GOLDEN POCKET</div>
+    </div>
+    <div class="fib-zone-fill" style="top:55%;height:12%;background:linear-gradient(180deg,rgba(226,232,240,0.03),rgba(226,232,240,0.015));">
+      <div class="zone-label" style="top:50%;color:rgba(226,232,240,0.2);">OTE</div>
+    </div>
+
+    <div class="price-scale"></div>
+  </div>
+</div>
+
+</body>
+</html>

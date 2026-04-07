@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Fibonacci Levels — Chart Mockup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0f1729; color: #e2e8f0; font-family: 'Inter', -apple-system, sans-serif; }
+
+  .page-title {
+    text-align: center; padding: 20px; font-size: 13px; color: #64748b;
+    border-bottom: 1px solid #1e293b;
+  }
+  .page-title h1 { font-size: 18px; color: #e2e8f0; margin-bottom: 4px; }
+
+  .demo-section {
+    max-width: 1000px; margin: 30px auto; padding: 0 20px;
+  }
+  .demo-label {
+    font-size: 11px; font-weight: 700; color: #fbbf24; text-transform: uppercase;
+    letter-spacing: 2px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;
+  }
+  .demo-label .tag {
+    background: rgba(251,191,36,0.15); color: #fbbf24; font-size: 9px; padding: 2px 8px;
+    border-radius: 4px; font-weight: 800;
+  }
+  .demo-desc {
+    font-size: 12px; color: #64748b; margin-bottom: 16px; line-height: 1.6;
+  }
+
+  .separator { height: 1px; background: #1e293b; margin: 30px 0; }
+
+  /* Chart container */
+  .chart-mock {
+    position: relative; height: 500px; background: #1a2540;
+    border-radius: 12px; border: 1px solid #243354; overflow: hidden;
+  }
+
+  /* Grid */
+  .chart-grid {
+    position: absolute; inset: 0;
+    background:
+      repeating-linear-gradient(90deg, transparent, transparent 80px, rgba(36,51,84,0.5) 80px, rgba(36,51,84,0.5) 81px),
+      repeating-linear-gradient(0deg, transparent, transparent 50px, rgba(36,51,84,0.3) 50px, rgba(36,51,84,0.3) 51px);
+  }
+
+  /* Price scale on right */
+  .price-scale {
+    position: absolute; right: 0; top: 0; bottom: 0; width: 70px;
+    background: rgba(15, 23, 41, 0.9); border-left: 1px solid #243354;
+    display: flex; flex-direction: column; justify-content: space-between;
+    padding: 10px 0;
+  }
+  .price-tick {
+    font-size: 9px; color: #64748b; text-align: right; padding-right: 8px;
+    font-family: monospace;
+  }
+
+  /* ═══════════════════════════════════════════════════════
+     FIB RETRACEMENT LEVELS — Full width horizontal lines
+     ═══════════════════════════════════════════════════════ */
+
+  /* Each fib level is a full-width line with label + price */
+  .fib-level {
+    position: absolute; left: 0; right: 70px; height: 0;
+    border-top: 1px dashed;
+    display: flex; align-items: center;
+  }
+
+  /* Fib label on left side */
+  .fib-label {
+    position: absolute; left: 8px; top: -10px;
+    font-size: 9px; font-weight: 700; font-family: monospace;
+    display: flex; align-items: center; gap: 6px;
+    padding: 1px 6px; border-radius: 3px;
+    white-space: nowrap;
+  }
+
+  /* Fib price on right side (just before price scale) */
+  .fib-price {
+    position: absolute; right: 4px; top: -8px;
+    font-size: 9px; font-weight: 700; font-family: monospace;
+    padding: 1px 6px; border-radius: 3px;
+  }
+
+  /* Shaded zones between levels */
+  .fib-zone {
+    position: absolute; left: 0; right: 70px;
+    pointer-events: none;
+  }
+
+  /* Color scheme: Golden ratio zone gets stronger color */
+  .fib-0     { border-color: rgba(139,92,246,0.4); top: 10%; }
+  .fib-236   { border-color: rgba(16,185,129,0.3); top: 22%; }
+  .fib-382   { border-color: rgba(16,185,129,0.5); top: 34%; }
+  .fib-500   { border-color: rgba(251,191,36,0.5); top: 45%; }
+  .fib-618   { border-color: rgba(239,68,68,0.5); top: 56%; }
+  .fib-786   { border-color: rgba(239,68,68,0.3); top: 68%; }
+  .fib-1000  { border-color: rgba(139,92,246,0.4); top: 80%; }
+
+  /* Extension levels (below 1.0) */
+  .fib-1272  { border-color: rgba(6,182,212,0.3); top: 88%; border-top-style: dotted; }
+  .fib-1618  { border-color: rgba(6,182,212,0.4); top: 94%; border-top-style: dotted; }
+
+  /* Label backgrounds */
+  .fib-0 .fib-label     { background: rgba(139,92,246,0.15); color: #a78bfa; }
+  .fib-236 .fib-label   { background: rgba(16,185,129,0.1); color: #34d399; }
+  .fib-382 .fib-label   { background: rgba(16,185,129,0.15); color: #34d399; }
+  .fib-500 .fib-label   { background: rgba(251,191,36,0.15); color: #fbbf24; }
+  .fib-618 .fib-label   { background: rgba(239,68,68,0.15); color: #f87171; }
+  .fib-786 .fib-label   { background: rgba(239,68,68,0.1); color: #f87171; }
+  .fib-1000 .fib-label  { background: rgba(139,92,246,0.15); color: #a78bfa; }
+  .fib-1272 .fib-label  { background: rgba(6,182,212,0.1); color: #22d3ee; }
+  .fib-1618 .fib-label  { background: rgba(6,182,212,0.15); color: #22d3ee; }
+
+  .fib-0 .fib-price     { color: #a78bfa; background: rgba(139,92,246,0.1); }
+  .fib-236 .fib-price   { color: #34d399; background: rgba(16,185,129,0.08); }
+  .fib-382 .fib-price   { color: #34d399; background: rgba(16,185,129,0.1); }
+  .fib-500 .fib-price   { color: #fbbf24; background: rgba(251,191,36,0.1); }
+  .fib-618 .fib-price   { color: #f87171; background: rgba(239,68,68,0.1); }
+  .fib-786 .fib-price   { color: #f87171; background: rgba(239,68,68,0.08); }
+  .fib-1000 .fib-price  { color: #a78bfa; background: rgba(139,92,246,0.1); }
+  .fib-1272 .fib-price  { color: #22d3ee; background: rgba(6,182,212,0.08); }
+  .fib-1618 .fib-price  { color: #22d3ee; background: rgba(6,182,212,0.1); }
+
+  /* Shaded zones between key levels */
+  .zone-golden {
+    top: 45%; height: 11%;
+    background: linear-gradient(180deg, rgba(251,191,36,0.04) 0%, rgba(239,68,68,0.06) 100%);
+    border-left: 2px solid rgba(251,191,36,0.15);
+  }
+  .zone-ote {
+    top: 56%; height: 12%;
+    background: linear-gradient(180deg, rgba(239,68,68,0.05) 0%, rgba(239,68,68,0.03) 100%);
+    border-left: 2px solid rgba(239,68,68,0.12);
+  }
+  .zone-ote-label {
+    position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+    font-size: 8px; font-weight: 700; color: rgba(239,68,68,0.5);
+    letter-spacing: 1px; text-transform: uppercase;
+    writing-mode: vertical-lr; text-orientation: mixed;
+  }
+
+  /* Anchor dots (wave swing points) */
+  .fib-anchor {
+    position: absolute; width: 10px; height: 10px; border-radius: 50%;
+    border: 2px solid; transform: translate(-50%, -50%);
+  }
+  .anchor-high {
+    background: rgba(139,92,246,0.2); border-color: #8b5cf6;
+    top: 10%; left: 45%;
+  }
+  .anchor-low {
+    background: rgba(139,92,246,0.2); border-color: #8b5cf6;
+    top: 80%; left: 20%;
+  }
+
+  /* Connecting line between anchors */
+  .fib-connector {
+    position: absolute; width: 2px;
+    background: linear-gradient(180deg, #8b5cf6 0%, rgba(139,92,246,0.2) 100%);
+    left: 20%; top: 10%; height: 70%;
+    opacity: 0.3;
+  }
+
+  /* Wave labels on anchor points */
+  .wave-anchor-label {
+    position: absolute; font-size: 10px; font-weight: 800;
+    padding: 2px 6px; border-radius: 10px;
+  }
+  .wave-label-3 {
+    top: 7%; left: 47%; background: rgba(139,92,246,0.2); color: #a78bfa;
+    border: 1px solid rgba(139,92,246,0.4);
+  }
+  .wave-label-2 {
+    top: 78%; left: 16%; background: rgba(139,92,246,0.2); color: #a78bfa;
+    border: 1px solid rgba(139,92,246,0.4);
+  }
+
+  /* ═══════════════════════════════════════════════════════
+     DESIGN B: Compact with extension targets below
+     ═══════════════════════════════════════════════════════ */
+
+  .ext-level {
+    position: absolute; left: 0; right: 70px; height: 0;
+    border-top: 1px dotted;
+    display: flex; align-items: center;
+  }
+  .ext-label {
+    position: absolute; left: 8px; top: -10px;
+    font-size: 8px; font-weight: 700; font-family: monospace;
+    display: flex; align-items: center; gap: 4px;
+    padding: 1px 5px; border-radius: 3px; white-space: nowrap;
+  }
+  .ext-price {
+    position: absolute; right: 4px; top: -8px;
+    font-size: 9px; font-weight: 700; font-family: monospace;
+    padding: 1px 6px; border-radius: 3px;
+  }
+
+  /* Target zone highlight */
+  .target-zone {
+    position: absolute; left: 0; right: 70px;
+    border-radius: 2px;
+    display: flex; align-items: center; padding-left: 8px;
+  }
+  .target-label {
+    font-size: 8px; font-weight: 700; letter-spacing: 0.5px;
+    text-transform: uppercase; opacity: 0.7;
+  }
+
+  /* Invalidation line */
+  .invalidation-line {
+    position: absolute; left: 0; right: 70px; height: 0;
+    border-top: 2px dashed rgba(239,83,80,0.5);
+  }
+  .invalidation-label {
+    position: absolute; left: 8px; top: -10px;
+    font-size: 8px; font-weight: 800; color: #ef5350;
+    background: rgba(239,83,80,0.12); padding: 1px 6px; border-radius: 3px;
+  }
+  .invalidation-price {
+    position: absolute; right: 4px; top: -9px;
+    font-size: 9px; font-weight: 700; color: #ef5350;
+    background: rgba(239,83,80,0.15); padding: 1px 6px; border-radius: 3px;
+    font-family: monospace;
+  }
+
+  /* ═══════════════════════════════════════════════════════
+     DESIGN B: Minimal Fib (price line style)
+     ═══════════════════════════════════════════════════════ */
+  .priceline-fib {
+    position: absolute; left: 0; right: 0; height: 0;
+  }
+  .priceline-fib .pl-line {
+    position: absolute; left: 0; right: 70px; top: 0;
+    border-top: 1px solid;
+  }
+  .priceline-fib .pl-badge {
+    position: absolute; right: 0; top: -9px; width: 70px; height: 18px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 700; font-family: monospace;
+  }
+  .priceline-fib .pl-tag {
+    position: absolute; left: 4px; top: -8px;
+    font-size: 8px; font-weight: 700; padding: 0px 4px;
+    border-radius: 2px; font-family: monospace;
+  }
+
+  /* Comparison table */
+  table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 20px; }
+  th { text-align: left; padding: 8px; color: #94a3b8; border-bottom: 1px solid #334155; }
+  td { padding: 8px; border-bottom: 1px solid #1e293b; color: #cbd5e1; }
+</style>
+</head>
+<body>
+
+<div class="page-title">
+  <h1>Fibonacci Levels on Chart — Design Preview</h1>
+  How Fib Retracement + Extension levels should render on the live chart
+</div>
+
+<!-- ══════════ DESIGN A: Full Fib Retracement + Extensions ══════════ -->
+<div class="demo-section">
+  <div class="demo-label">
+    Design A — Full Fibonacci Retracement + Extensions
+    <span class="tag">Recommended</span>
+  </div>
+  <div class="demo-desc">
+    Full-width horizontal lines at each Fib level between two wave swings (e.g., Wave 2 → Wave 3).
+    Shaded OTE (0.618–0.786) zone highlighted. Extension targets shown below with dotted lines.
+    Each line shows the Fib ratio on the left and the price on the right.
+  </div>
+
+  <div class="chart-mock">
+    <div class="chart-grid"></div>
+
+    <!-- Connecting line between anchors -->
+    <div class="fib-connector"></div>
+
+    <!-- Anchor points -->
+    <div class="fib-anchor anchor-high"></div>
+    <div class="fib-anchor anchor-low"></div>
+    <div class="wave-anchor-label wave-label-3">③</div>
+    <div class="wave-anchor-label wave-label-2">②</div>
+
+    <!-- Fib retracement levels (0% = top/Wave 3, 100% = bottom/Wave 2) -->
+    <div class="fib-level fib-0">
+      <div class="fib-label">0.000 <span style="opacity:0.5">Wave 3 High</span></div>
+      <div class="fib-price">52,908</div>
+    </div>
+    <div class="fib-level fib-236">
+      <div class="fib-label">0.236</div>
+      <div class="fib-price">52,444</div>
+    </div>
+    <div class="fib-level fib-382">
+      <div class="fib-label">0.382</div>
+      <div class="fib-price">52,350</div>
+    </div>
+    <div class="fib-level fib-500">
+      <div class="fib-label">0.500</div>
+      <div class="fib-price">52,274</div>
+    </div>
+    <div class="fib-level fib-618">
+      <div class="fib-label">0.618 <span style="font-size:7px;opacity:0.6">Golden Ratio</span></div>
+      <div class="fib-price">52,197</div>
+    </div>
+    <div class="fib-level fib-786">
+      <div class="fib-label">0.786</div>
+      <div class="fib-price">52,089</div>
+    </div>
+    <div class="fib-level fib-1000">
+      <div class="fib-label">1.000 <span style="opacity:0.5">Wave 2 Low</span></div>
+      <div class="fib-price">51,951</div>
+    </div>
+
+    <!-- Extension levels -->
+    <div class="fib-level fib-1272">
+      <div class="fib-label">1.272 <span style="font-size:7px;opacity:0.5">Ext</span></div>
+      <div class="fib-price">51,691</div>
+    </div>
+    <div class="fib-level fib-1618">
+      <div class="fib-label">1.618 <span style="font-size:7px;opacity:0.5">Ext</span></div>
+      <div class="fib-price">51,307</div>
+    </div>
+
+    <!-- Shaded zones -->
+    <div class="fib-zone zone-golden"></div>
+    <div class="fib-zone zone-ote">
+      <div class="zone-ote-label">OTE Zone</div>
+    </div>
+
+    <!-- Invalidation line -->
+    <div class="invalidation-line" style="top: 80%;">
+      <div class="invalidation-label">⚠ INVALID: W4 must not overlap W1</div>
+      <div class="invalidation-price">51,951</div>
+    </div>
+
+    <!-- Price scale -->
+    <div class="price-scale">
+      <div class="price-tick">52,900</div>
+      <div class="price-tick">52,700</div>
+      <div class="price-tick">52,500</div>
+      <div class="price-tick">52,300</div>
+      <div class="price-tick">52,100</div>
+      <div class="price-tick">51,900</div>
+      <div class="price-tick">51,700</div>
+      <div class="price-tick">51,500</div>
+      <div class="price-tick">51,300</div>
+    </div>
+  </div>
+</div>
+
+<div class="separator"></div>
+
+<!-- ══════════ DESIGN B: TradingView-style Price Lines ══════════ -->
+<div class="demo-section">
+  <div class="demo-label">
+    Design B — TradingView-Style Price Lines
+    <span class="tag">Clean</span>
+  </div>
+  <div class="demo-desc">
+    Uses TradingView Lightweight Charts' native <code>createPriceLine()</code> API for Fib levels.
+    Each level renders as a native price line with a colored badge on the price axis.
+    Cleanest integration — no SVG overlay needed. Limited to solid/dashed lines (no shaded zones).
+  </div>
+
+  <div class="chart-mock">
+    <div class="chart-grid"></div>
+
+    <!-- Price line style fibs -->
+    <div class="priceline-fib" style="top: 10%">
+      <div class="pl-line" style="border-color: rgba(139,92,246,0.4);"></div>
+      <div class="pl-badge" style="color: #a78bfa; background: rgba(139,92,246,0.15);">52,908</div>
+      <div class="pl-tag" style="color: #a78bfa; background: rgba(139,92,246,0.1);">0.000</div>
+    </div>
+    <div class="priceline-fib" style="top: 22%">
+      <div class="pl-line" style="border-color: rgba(16,185,129,0.25); border-top-style: dashed;"></div>
+      <div class="pl-badge" style="color: #34d399; background: rgba(16,185,129,0.1);">52,444</div>
+      <div class="pl-tag" style="color: #34d399; background: rgba(16,185,129,0.08);">0.236</div>
+    </div>
+    <div class="priceline-fib" style="top: 34%">
+      <div class="pl-line" style="border-color: rgba(16,185,129,0.35); border-top-style: dashed;"></div>
+      <div class="pl-badge" style="color: #34d399; background: rgba(16,185,129,0.12);">52,350</div>
+      <div class="pl-tag" style="color: #34d399; background: rgba(16,185,129,0.1);">0.382</div>
+    </div>
+    <div class="priceline-fib" style="top: 45%">
+      <div class="pl-line" style="border-color: rgba(251,191,36,0.4); border-top-style: dashed;"></div>
+      <div class="pl-badge" style="color: #fbbf24; background: rgba(251,191,36,0.12);">52,274</div>
+      <div class="pl-tag" style="color: #fbbf24; background: rgba(251,191,36,0.1);">0.500</div>
+    </div>
+    <div class="priceline-fib" style="top: 56%">
+      <div class="pl-line" style="border-color: rgba(239,68,68,0.4); border-top-style: dashed; border-top-width: 1.5px;"></div>
+      <div class="pl-badge" style="color: #f87171; background: rgba(239,68,68,0.15);">52,197</div>
+      <div class="pl-tag" style="color: #f87171; background: rgba(239,68,68,0.12);">0.618</div>
+    </div>
+    <div class="priceline-fib" style="top: 68%">
+      <div class="pl-line" style="border-color: rgba(239,68,68,0.25); border-top-style: dashed;"></div>
+      <div class="pl-badge" style="color: #f87171; background: rgba(239,68,68,0.1);">52,089</div>
+      <div class="pl-tag" style="color: #f87171; background: rgba(239,68,68,0.08);">0.786</div>
+    </div>
+    <div class="priceline-fib" style="top: 80%">
+      <div class="pl-line" style="border-color: rgba(139,92,246,0.4);"></div>
+      <div class="pl-badge" style="color: #a78bfa; background: rgba(139,92,246,0.15);">51,951</div>
+      <div class="pl-tag" style="color: #a78bfa; background: rgba(139,92,246,0.1);">1.000</div>
+    </div>
+
+    <!-- Extensions as dotted lines -->
+    <div class="priceline-fib" style="top: 88%">
+      <div class="pl-line" style="border-color: rgba(6,182,212,0.25); border-top-style: dotted;"></div>
+      <div class="pl-badge" style="color: #22d3ee; background: rgba(6,182,212,0.08);">51,691</div>
+      <div class="pl-tag" style="color: #22d3ee; background: rgba(6,182,212,0.06);">1.272</div>
+    </div>
+    <div class="priceline-fib" style="top: 94%">
+      <div class="pl-line" style="border-color: rgba(6,182,212,0.3); border-top-style: dotted;"></div>
+      <div class="pl-badge" style="color: #22d3ee; background: rgba(6,182,212,0.1);">51,307</div>
+      <div class="pl-tag" style="color: #22d3ee; background: rgba(6,182,212,0.08);">1.618</div>
+    </div>
+
+    <div class="price-scale">
+      <div class="price-tick">52,900</div>
+      <div class="price-tick">52,700</div>
+      <div class="price-tick">52,500</div>
+      <div class="price-tick">52,300</div>
+      <div class="price-tick">52,100</div>
+      <div class="price-tick">51,900</div>
+      <div class="price-tick">51,700</div>
+      <div class="price-tick">51,500</div>
+      <div class="price-tick">51,300</div>
+    </div>
+  </div>
+</div>
+
+<div class="separator"></div>
+
+<!-- ══════════ DESIGN C: Combined — SVG overlay + price lines ══════════ -->
+<div class="demo-section">
+  <div class="demo-label">
+    Design C — Hybrid: SVG Zones + Native Price Lines
+    <span class="tag">Best of Both</span>
+  </div>
+  <div class="demo-desc">
+    Uses native <code>createPriceLine()</code> for crisp Fib levels with price axis badges,
+    plus SVG overlay for shaded OTE zone and target labels. The golden ratio (0.618) and OTE zone
+    get special emphasis. Extension targets rendered as pulsing zones on the right side.
+  </div>
+
+  <div class="chart-mock">
+    <div class="chart-grid"></div>
+
+    <!-- Native price lines for fibs -->
+    <div class="priceline-fib" style="top: 10%">
+      <div class="pl-line" style="border-color: rgba(139,92,246,0.3);"></div>
+      <div class="pl-badge" style="color: #a78bfa; background: rgba(139,92,246,0.15);">52,908</div>
+      <div class="pl-tag" style="color: #a78bfa; background: rgba(139,92,246,0.08);">0.000</div>
+    </div>
+    <div class="priceline-fib" style="top: 22%">
+      <div class="pl-line" style="border-color: rgba(16,185,129,0.2); border-top-style: dashed;"></div>
+      <div class="pl-badge" style="color: #34d399; background: rgba(16,185,129,0.1);">52,444</div>
+      <div class="pl-tag" style="color: #34d399; background: rgba(16,185,129,0.06);">0.236</div>
+    </div>
+    <div class="priceline-fib" style="top: 34%">
+      <div class="pl-line" style="border-color: rgba(16,185,129,0.3); border-top-style: dashed;"></div>
+      <div class="pl-badge" style="color: #34d399; background: rgba(16,185,129,0.12);">52,350</div>
+      <div class="pl-tag" style="color: #34d399; background: rgba(16,185,129,0.08);">0.382</div>
+    </div>
+    <div class="priceline-fib" style="top: 45%">
+      <div class="pl-line" style="border-color: rgba(251,191,36,0.35); border-top-style: dashed;"></div>
+      <div class="pl-badge" style="color: #fbbf24; background: rgba(251,191,36,0.12);">52,274</div>
+      <div class="pl-tag" style="color: #fbbf24; background: rgba(251,191,36,0.08);">0.500</div>
+    </div>
+    <div class="priceline-fib" style="top: 56%">
+      <div class="pl-line" style="border-color: rgba(239,68,68,0.4); border-top-style: dashed; border-top-width: 1.5px;"></div>
+      <div class="pl-badge" style="color: #f87171; background: rgba(239,68,68,0.15);">52,197</div>
+      <div class="pl-tag" style="color: #f87171; background: rgba(239,68,68,0.1);">0.618</div>
+    </div>
+    <div class="priceline-fib" style="top: 68%">
+      <div class="pl-line" style="border-color: rgba(239,68,68,0.2); border-top-style: dashed;"></div>
+      <div class="pl-badge" style="color: #f87171; background: rgba(239,68,68,0.08);">52,089</div>
+      <div class="pl-tag" style="color: #f87171; background: rgba(239,68,68,0.06);">0.786</div>
+    </div>
+    <div class="priceline-fib" style="top: 80%">
+      <div class="pl-line" style="border-color: rgba(139,92,246,0.3);"></div>
+      <div class="pl-badge" style="color: #a78bfa; background: rgba(139,92,246,0.12);">51,951</div>
+      <div class="pl-tag" style="color: #a78bfa; background: rgba(139,92,246,0.08);">1.000</div>
+    </div>
+
+    <!-- SVG OTE zone overlay (0.618 → 0.786) -->
+    <div class="fib-zone" style="top: 56%; height: 12%; background: linear-gradient(180deg, rgba(239,68,68,0.06), rgba(239,68,68,0.03)); border-left: 2px solid rgba(239,68,68,0.15);">
+      <div style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:8px;font-weight:700;color:rgba(239,68,68,0.5);letter-spacing:1px;">OTE ZONE</div>
+    </div>
+
+    <!-- Golden pocket highlight (0.5 → 0.618) -->
+    <div class="fib-zone" style="top: 45%; height: 11%; background: linear-gradient(180deg, rgba(251,191,36,0.04), rgba(239,68,68,0.05));">
+      <div style="position:absolute;right:80px;top:50%;transform:translateY(-50%);font-size:7px;font-weight:700;color:rgba(251,191,36,0.4);letter-spacing:0.5px;">GOLDEN POCKET</div>
+    </div>
+
+    <!-- Extension target zones (right side only, pulsing) -->
+    <div style="position:absolute;top:87%;left:60%;right:70px;height:14px;background:rgba(6,182,212,0.08);border:1px solid rgba(6,182,212,0.15);border-radius:2px;display:flex;align-items:center;padding-left:6px;">
+      <span style="font-size:7px;color:#22d3ee;font-weight:700;">W5 = 1.272 × W1</span>
+      <span style="position:absolute;right:4px;font-size:8px;color:#22d3ee;font-weight:700;font-family:monospace;">51,691</span>
+    </div>
+    <div style="position:absolute;top:93%;left:60%;right:70px;height:14px;background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.2);border-radius:2px;display:flex;align-items:center;padding-left:6px;animation: pulse 2s ease infinite;">
+      <span style="font-size:7px;color:#22d3ee;font-weight:700;">W5 = 1.618 × W1</span>
+      <span style="position:absolute;right:4px;font-size:8px;color:#22d3ee;font-weight:700;font-family:monospace;">51,307</span>
+    </div>
+
+    <style>@keyframes pulse { 0%,100% { opacity: 0.7; } 50% { opacity: 1; } }</style>
+
+    <!-- Invalidation -->
+    <div class="invalidation-line" style="top: 80%;">
+      <div class="invalidation-label">⚠ W4 invalidation</div>
+    </div>
+
+    <div class="price-scale">
+      <div class="price-tick">52,900</div>
+      <div class="price-tick">52,700</div>
+      <div class="price-tick">52,500</div>
+      <div class="price-tick">52,300</div>
+      <div class="price-tick">52,100</div>
+      <div class="price-tick">51,900</div>
+      <div class="price-tick">51,700</div>
+      <div class="price-tick">51,500</div>
+      <div class="price-tick">51,300</div>
+    </div>
+  </div>
+</div>
+
+<div class="separator"></div>
+
+<!-- Comparison -->
+<div class="demo-section" style="margin-bottom: 60px;">
+  <div class="demo-label">Implementation Comparison</div>
+  <table>
+    <thead>
+      <tr><th>Feature</th><th>Design A (SVG Overlay)</th><th>Design B (Price Lines)</th><th>Design C (Hybrid)</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Fib level lines</td>
+        <td style="color:#34d399">Full-width SVG lines</td>
+        <td style="color:#34d399">Native createPriceLine()</td>
+        <td style="color:#34d399">Native createPriceLine()</td>
+      </tr>
+      <tr>
+        <td>Price axis badge</td>
+        <td style="color:#f87171">Custom SVG badge</td>
+        <td style="color:#34d399">Native (built-in)</td>
+        <td style="color:#34d399">Native (built-in)</td>
+      </tr>
+      <tr>
+        <td>Shaded zones (OTE)</td>
+        <td style="color:#34d399">Yes, SVG rects</td>
+        <td style="color:#f87171">Not possible</td>
+        <td style="color:#34d399">Yes, SVG overlay</td>
+      </tr>
+      <tr>
+        <td>Scroll/zoom sync</td>
+        <td style="color:#fbbf24">Manual (priceToCoordinate)</td>
+        <td style="color:#34d399">Automatic</td>
+        <td style="color:#fbbf24">Lines auto, zones manual</td>
+      </tr>
+      <tr>
+        <td>Performance</td>
+        <td style="color:#fbbf24">Re-render on scroll</td>
+        <td style="color:#34d399">Best (native)</td>
+        <td style="color:#34d399">Good</td>
+      </tr>
+      <tr>
+        <td>Visual quality</td>
+        <td style="color:#34d399">Richest</td>
+        <td style="color:#fbbf24">Clean but plain</td>
+        <td style="color:#34d399">Rich + crisp</td>
+      </tr>
+      <tr>
+        <td style="font-weight:700">Recommended</td>
+        <td></td>
+        <td></td>
+        <td style="color:#10b981;font-weight:700">✓ Best approach</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+</body>
+</html>
