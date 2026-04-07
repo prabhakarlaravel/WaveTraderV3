@@ -1,9 +1,10 @@
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, inject, computed, watch, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import { useChartStore } from '../../stores/useChartStore'
 
 const chartStore = useChartStore()
+const signalGlow = inject('signalGlow', ref(false))
 const mtfData = ref(null)
 const loading = ref(false)
 const expandedTf = ref(null)
@@ -242,7 +243,7 @@ function formatPrice(p) {
 
     <template v-if="mtfData">
       <!-- Call / Put Recommendation — Simple for basic users -->
-      <div v-if="callPutRec" class="cp-block" :class="callPutRec.bgClass">
+      <div v-if="callPutRec" class="cp-block" :class="[callPutRec.bgClass, signalGlow ? 'cp-glow' : '']">
         <!-- Big recommendation + confidence -->
         <div class="cp-top">
           <span class="cp-emoji">{{ callPutRec.emoji }}</span>
@@ -494,4 +495,21 @@ function formatPrice(p) {
 .sltp-card { flex: 1; padding: 6px; background: var(--card); border-radius: 5px; border: 1px solid var(--border); text-align: center; }
 .sltp-label { font-size: 7px; font-weight: 700; text-transform: uppercase; }
 .sltp-price { font-size: 11px; font-weight: 700; font-family: var(--mono); margin-top: 1px; }
+
+/* Signal glow effect when signal changes */
+.cp-glow {
+  animation: cpGlowPulse 1.2s ease-in-out 5;
+}
+.cp-glow.cp-call {
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.35), 0 0 40px rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.6);
+}
+.cp-glow.cp-put {
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.35), 0 0 40px rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.6);
+}
+@keyframes cpGlowPulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.5); }
+}
 </style>

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
+import { ref, provide, onMounted, onUnmounted, watch, computed } from 'vue'
 import { createChart, CandlestickSeries, HistogramSeries } from 'lightweight-charts'
 import { useChartStore } from '../stores/useChartStore'
 import { useRealtimeStore } from '../stores/useRealtimeStore'
@@ -8,7 +8,9 @@ import SymbolSelector from '../components/shared/SymbolSelector.vue'
 import SignalFeed from '../components/panels/SignalFeed.vue'
 import TradePanel from '../components/panels/TradePanel.vue'
 import WaveMatrixPanel from '../components/panels/WaveMatrixPanel.vue'
+import SignalAlert from '../components/alerts/SignalAlert.vue'
 import { useTradeStore } from '../stores/useTradeStore'
+import { useSignalAlert } from '../composables/useSignalAlert'
 
 const chartStore = useChartStore()
 const realtime = useRealtimeStore()
@@ -55,6 +57,10 @@ const overlayConfig = [
 const confluence = computed(() => {
   return chartStore.overlays?.confluence || chartStore.mtfConfluence || null
 })
+
+// Signal alert system — fires when BUY CALL / BUY PUT changes
+const { alertState, signalGlow, dismissAlert } = useSignalAlert(confluence)
+provide('signalGlow', signalGlow)
 
 const lastPrice = ref({ price: 0, change: 0, bull: true })
 
@@ -239,6 +245,9 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
 
 <template>
   <div class="dashboard">
+    <!-- Signal change alert overlay -->
+    <SignalAlert :alert-state="alertState" @dismiss="dismissAlert" />
+
     <!-- Chart toolbar -->
     <div class="chart-toolbar">
       <!-- Symbol selector -->
@@ -343,7 +352,8 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
           <!-- Recommendation card -->
           <div :class="['bias-card', 'bias-action',
             confluence?.callPut === 'BUY CALL' ? 'bull' :
-            confluence?.callPut === 'BUY PUT' ? 'bear' : 'warn']"
+            confluence?.callPut === 'BUY PUT' ? 'bear' : 'warn',
+            signalGlow ? 'bias-glow' : '']"
             style="min-width: 240px">
             <span class="bias-emoji" style="font-size: 22px">
               {{ confluence?.callPut === 'BUY CALL' ? '📈' : confluence?.callPut === 'BUY PUT' ? '📉' : '⏸' }}
@@ -507,6 +517,23 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
 .bias-label { font-size: 10px; color: var(--muted); margin-bottom: 1px; }
 .bias-value { font-family: var(--mono); font-size: 13px; font-weight: 700; }
 .bias-conf { font-family: var(--mono); font-size: 18px; font-weight: 800; flex-shrink: 0; }
+
+/* Signal alert glow on bias card */
+.bias-glow {
+  animation: biasGlowPulse 1.2s ease-in-out 5;
+}
+.bias-glow.bull {
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.3), 0 0 30px rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.6) !important;
+}
+.bias-glow.bear {
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.3), 0 0 30px rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.6) !important;
+}
+@keyframes biasGlowPulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.4); }
+}
 
 /* ── Wave Matrix Panel ── */
 .matrix-panel {

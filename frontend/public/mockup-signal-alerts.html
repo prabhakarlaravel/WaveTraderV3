@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Signal Alert — Alternative Designs</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0f1729; color: #e2e8f0; font-family: 'Inter', -apple-system, sans-serif; overflow-x: hidden; }
+
+  .page-title {
+    text-align: center; padding: 20px; font-size: 13px; color: #64748b;
+    border-bottom: 1px solid #1e293b;
+  }
+  .page-title h1 { font-size: 18px; color: #e2e8f0; margin-bottom: 4px; }
+
+  .demo-section {
+    max-width: 900px; margin: 30px auto; padding: 0 20px;
+  }
+  .demo-label {
+    font-size: 11px; font-weight: 700; color: #fbbf24; text-transform: uppercase;
+    letter-spacing: 2px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+  }
+  .demo-label .tag {
+    background: rgba(251,191,36,0.15); color: #fbbf24; font-size: 9px; padding: 2px 8px;
+    border-radius: 4px; font-weight: 800;
+  }
+  .demo-desc {
+    font-size: 12px; color: #64748b; margin-bottom: 16px; line-height: 1.6;
+  }
+
+  .demo-container {
+    background: #1a2540; border-radius: 12px; border: 1px solid #243354;
+    overflow: hidden; position: relative; min-height: 200px;
+  }
+
+  /* Fake chart background */
+  .fake-chart {
+    position: absolute; inset: 0; opacity: 0.3;
+    background:
+      repeating-linear-gradient(90deg, transparent, transparent 60px, #243354 60px, #243354 61px),
+      repeating-linear-gradient(0deg, transparent, transparent 40px, #243354 40px, #243354 41px);
+  }
+
+  .separator { height: 1px; background: #1e293b; margin: 20px 0; }
+
+  /* ═══════════════════════════════════════════════════════════════
+     OPTION 2: CINEMATIC SLIDE-IN BANNER
+     ═══════════════════════════════════════════════════════════════ */
+  .banner-alert {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+    animation: bannerSlideDown 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  @keyframes bannerSlideDown {
+    from { transform: translateY(-100%); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+
+  .banner-inner {
+    display: flex; align-items: center; gap: 16px;
+    padding: 14px 20px;
+    position: relative; overflow: hidden;
+  }
+
+  .banner-call {
+    background: linear-gradient(135deg, #022c22 0%, #064e3b 50%, #022c22 100%);
+    border-bottom: 2px solid rgba(16, 185, 129, 0.5);
+    box-shadow: 0 4px 30px rgba(16, 185, 129, 0.15);
+  }
+  .banner-put {
+    background: linear-gradient(135deg, #1c0a0a 0%, #450a0a 50%, #1c0a0a 100%);
+    border-bottom: 2px solid rgba(239, 68, 68, 0.5);
+    box-shadow: 0 4px 30px rgba(239, 68, 68, 0.15);
+  }
+
+  /* Animated scanner line */
+  .banner-inner::before {
+    content: '';
+    position: absolute; top: 0; left: -100%; width: 50%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.03), transparent);
+    animation: bannerScan 3s ease-in-out infinite;
+  }
+  @keyframes bannerScan {
+    0% { left: -50%; }
+    100% { left: 150%; }
+  }
+
+  .banner-signal-badge {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 8px; font-weight: 800; letter-spacing: 2px;
+    color: #fbbf24; text-transform: uppercase;
+  }
+  .banner-signal-badge .dot {
+    width: 5px; height: 5px; border-radius: 50%; background: #fbbf24;
+    animation: dotPulse 1s infinite;
+  }
+  @keyframes dotPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  .banner-emoji { font-size: 28px; flex-shrink: 0; }
+  .banner-main { flex: 1; }
+  .banner-rec {
+    font-size: 22px; font-weight: 900; letter-spacing: 0.5px; line-height: 1;
+  }
+  .banner-call .banner-rec { color: #10b981; }
+  .banner-put .banner-rec { color: #ef4444; }
+
+  .banner-sub {
+    font-size: 10px; color: #9ca3af; margin-top: 3px; display: flex; gap: 12px;
+  }
+  .banner-sub .transition { color: #fbbf24; font-weight: 600; }
+
+  .banner-conf { text-align: right; flex-shrink: 0; }
+  .banner-conf-pct { font-size: 24px; font-weight: 900; line-height: 1; }
+  .banner-call .banner-conf-pct { color: #10b981; }
+  .banner-put .banner-conf-pct { color: #ef4444; }
+  .banner-conf-label { font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }
+  .banner-call .banner-conf-label { color: #34d399; }
+  .banner-put .banner-conf-label { color: #f87171; }
+
+  .banner-dismiss {
+    flex-shrink: 0; cursor: pointer; width: 24px; height: 24px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%; background: rgba(255,255,255,0.06);
+    color: #64748b; font-size: 12px; transition: all 0.2s;
+  }
+  .banner-dismiss:hover { background: rgba(255,255,255,0.12); color: #e2e8f0; }
+
+  /* Countdown bar at bottom of banner */
+  .banner-countdown {
+    height: 3px; background: rgba(255,255,255,0.05);
+  }
+  .banner-countdown-fill {
+    height: 100%; width: 75%;
+    transition: width 12s linear;
+  }
+  .banner-call .banner-countdown-fill { background: linear-gradient(90deg, #10b981, #34d399); }
+  .banner-put .banner-countdown-fill { background: linear-gradient(90deg, #ef4444, #f87171); }
+
+
+  /* ═══════════════════════════════════════════════════════════════
+     OPTION 3: CORNER NOTIFICATION CARD (bottom-right)
+     ═══════════════════════════════════════════════════════════════ */
+  .corner-alert {
+    position: absolute; bottom: 16px; right: 16px; z-index: 10;
+    width: 300px;
+    animation: cornerSlideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes cornerSlideIn {
+    from { transform: translateX(120%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+
+  .corner-card {
+    border-radius: 14px; overflow: hidden;
+    border: 1px solid; position: relative;
+  }
+  .corner-call {
+    background: linear-gradient(160deg, #071a0f 0%, #0d2818 50%, #071a0f 100%);
+    border-color: rgba(16, 185, 129, 0.4);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 20px rgba(16,185,129,0.1);
+  }
+  .corner-put {
+    background: linear-gradient(160deg, #1a0707 0%, #2a0e0e 50%, #1a0707 100%);
+    border-color: rgba(239, 68, 68, 0.4);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 20px rgba(239,68,68,0.1);
+  }
+
+  .corner-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px 0;
+  }
+  .corner-badge {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 8px; font-weight: 800; letter-spacing: 1.5px;
+    color: #fbbf24; text-transform: uppercase;
+  }
+  .corner-badge .dot {
+    width: 5px; height: 5px; border-radius: 50%; background: #fbbf24;
+    animation: dotPulse 1s infinite;
+  }
+  .corner-time { font-size: 9px; color: #475569; }
+
+  .corner-body { padding: 10px 14px; }
+  .corner-signal-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+  }
+  .corner-emoji { font-size: 24px; }
+  .corner-rec { font-size: 20px; font-weight: 900; flex: 1; }
+  .corner-call .corner-rec { color: #10b981; }
+  .corner-put .corner-rec { color: #ef4444; }
+  .corner-pct { font-size: 20px; font-weight: 800; }
+  .corner-call .corner-pct { color: #10b981; }
+  .corner-put .corner-pct { color: #ef4444; }
+
+  .corner-transition {
+    font-size: 10px; color: #64748b; margin-bottom: 6px;
+  }
+  .corner-transition .arrow { color: #fbbf24; font-weight: 700; }
+
+  .corner-reason {
+    font-size: 11px; color: #6b7280; line-height: 1.4; margin-bottom: 10px;
+  }
+
+  /* Action buttons in corner card */
+  .corner-actions {
+    display: flex; gap: 8px; padding: 0 14px 12px;
+  }
+  .corner-btn {
+    flex: 1; padding: 7px; border-radius: 8px; border: none;
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; cursor: pointer; transition: all 0.2s;
+  }
+  .corner-btn-trade {
+    color: #fff;
+  }
+  .corner-call .corner-btn-trade { background: rgba(16,185,129,0.2); border: 1px solid rgba(16,185,129,0.4); }
+  .corner-put .corner-btn-trade { background: rgba(239,68,68,0.2); border: 1px solid rgba(239,68,68,0.4); }
+  .corner-btn-dismiss {
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+    color: #64748b;
+  }
+
+  /* Countdown bar */
+  .corner-countdown {
+    height: 3px; background: rgba(255,255,255,0.05);
+  }
+  .corner-countdown-fill { height: 100%; width: 60%; }
+  .corner-call .corner-countdown-fill { background: #10b981; }
+  .corner-put .corner-countdown-fill { background: #ef4444; }
+
+
+  /* ═══════════════════════════════════════════════════════════════
+     OPTION 4: FULL-WIDTH TICKER-STYLE FLASH BAR
+     ═══════════════════════════════════════════════════════════════ */
+  .ticker-alert {
+    position: absolute; bottom: 0; left: 0; right: 0; z-index: 10;
+    animation: tickerSlideUp 0.4s ease;
+  }
+  @keyframes tickerSlideUp {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+
+  .ticker-inner {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 20px;
+    position: relative; overflow: hidden;
+  }
+
+  .ticker-call {
+    background: linear-gradient(90deg, #022c22, #064e3b, #022c22);
+    border-top: 2px solid rgba(16,185,129,0.4);
+  }
+  .ticker-put {
+    background: linear-gradient(90deg, #1c0a0a, #450a0a, #1c0a0a);
+    border-top: 2px solid rgba(239,68,68,0.4);
+  }
+
+  /* Scrolling LED-style effect */
+  .ticker-inner::after {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    animation: tickerGlow 2s ease-in-out infinite;
+  }
+  .ticker-call .ticker-inner::after {
+    background: linear-gradient(90deg, transparent, #10b981, transparent);
+  }
+  .ticker-put .ticker-inner::after {
+    background: linear-gradient(90deg, transparent, #ef4444, transparent);
+  }
+  @keyframes tickerGlow {
+    0% { opacity: 0.3; }
+    50% { opacity: 1; }
+    100% { opacity: 0.3; }
+  }
+
+  .ticker-flash {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    animation: flashBlink 0.6s ease-in-out infinite;
+  }
+  .ticker-call .ticker-flash { background: #10b981; box-shadow: 0 0 8px #10b981; }
+  .ticker-put .ticker-flash { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+  @keyframes flashBlink {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.7); }
+  }
+
+  .ticker-label {
+    font-size: 9px; font-weight: 800; color: #fbbf24; letter-spacing: 1.5px;
+    text-transform: uppercase; flex-shrink: 0;
+  }
+
+  .ticker-divider {
+    width: 1px; height: 24px; background: rgba(255,255,255,0.1); flex-shrink: 0;
+  }
+
+  .ticker-signal {
+    font-size: 18px; font-weight: 900; letter-spacing: 0.5px; flex-shrink: 0;
+  }
+  .ticker-call .ticker-signal { color: #10b981; }
+  .ticker-put .ticker-signal { color: #ef4444; }
+
+  .ticker-conf {
+    font-size: 16px; font-weight: 800; flex-shrink: 0;
+  }
+  .ticker-call .ticker-conf { color: #34d399; }
+  .ticker-put .ticker-conf { color: #f87171; }
+
+  .ticker-reason {
+    flex: 1; font-size: 11px; color: #9ca3af; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .ticker-close {
+    flex-shrink: 0; cursor: pointer; font-size: 14px; color: #475569;
+    padding: 4px 8px; border-radius: 4px; transition: all 0.2s;
+  }
+  .ticker-close:hover { color: #e2e8f0; background: rgba(255,255,255,0.05); }
+
+
+  /* ═══════════════════════════════════════════════════════════════
+     OPTION 5: PULSE RING + FLOATING PILL (minimal, non-blocking)
+     ═══════════════════════════════════════════════════════════════ */
+  .pill-alert {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10;
+    animation: pillDrop 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes pillDrop {
+    from { transform: translateX(-50%) translateY(-40px); opacity: 0; }
+    to { transform: translateX(-50%) translateY(0); opacity: 1; }
+  }
+
+  .pill-inner {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 18px; border-radius: 40px;
+    border: 1px solid; position: relative; cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .pill-call {
+    background: linear-gradient(135deg, #064e3b, #022c22);
+    border-color: rgba(16,185,129,0.5);
+    box-shadow: 0 4px 20px rgba(16,185,129,0.2), 0 0 40px rgba(16,185,129,0.08);
+  }
+  .pill-put {
+    background: linear-gradient(135deg, #450a0a, #1c0a0a);
+    border-color: rgba(239,68,68,0.5);
+    box-shadow: 0 4px 20px rgba(239,68,68,0.2), 0 0 40px rgba(239,68,68,0.08);
+  }
+
+  /* Outer pulse ring */
+  .pill-inner::before {
+    content: ''; position: absolute; inset: -4px;
+    border-radius: 40px; border: 2px solid;
+    animation: pillRing 1.5s ease-out infinite;
+    pointer-events: none;
+  }
+  .pill-call .pill-inner::before { border-color: rgba(16,185,129,0.3); }
+  .pill-put .pill-inner::before { border-color: rgba(239,68,68,0.3); }
+  @keyframes pillRing {
+    0% { transform: scale(1); opacity: 0.6; }
+    100% { transform: scale(1.08); opacity: 0; }
+  }
+
+  .pill-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    animation: pillDotPulse 1s infinite;
+  }
+  .pill-call .pill-dot { background: #10b981; box-shadow: 0 0 6px #10b981; }
+  .pill-put .pill-dot { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+  @keyframes pillDotPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .pill-text { font-size: 13px; font-weight: 800; letter-spacing: 0.3px; }
+  .pill-call .pill-text { color: #10b981; }
+  .pill-put .pill-text { color: #ef4444; }
+
+  .pill-pct { font-size: 13px; font-weight: 800; }
+  .pill-call .pill-pct { color: #34d399; }
+  .pill-put .pill-pct { color: #f87171; }
+
+  .pill-transition {
+    font-size: 9px; color: #64748b; font-weight: 600;
+  }
+
+  .pill-x {
+    font-size: 10px; color: #475569; margin-left: 4px; cursor: pointer;
+    transition: color 0.2s;
+  }
+  .pill-x:hover { color: #e2e8f0; }
+
+
+  /* ═══════════════════════════════════════════════════════════════
+     COMPARISON: SIDE BY SIDE GRID
+     ═══════════════════════════════════════════════════════════════ */
+  .compare-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+    max-width: 900px; margin: 30px auto; padding: 0 20px;
+  }
+  .compare-grid .demo-section { margin: 0; padding: 0; }
+
+  /* Button row */
+  .btn-row {
+    display: flex; gap: 10px; margin: 20px auto; max-width: 900px; padding: 0 20px;
+  }
+  .toggle-btn {
+    padding: 8px 16px; border-radius: 8px; border: 1px solid #334155;
+    background: #1e293b; color: #94a3b8; font-size: 11px; font-weight: 600;
+    cursor: pointer; transition: all 0.2s;
+  }
+  .toggle-btn:hover { background: #334155; color: #e2e8f0; }
+  .toggle-btn.active { background: #6366f1; border-color: #6366f1; color: #fff; }
+</style>
+</head>
+<body>
+
+<div class="page-title">
+  <h1>Signal Alert — Alternative UI Designs</h1>
+  Option 1 (Current): Full-Screen Overlay Modal — already implemented
+</div>
+
+<!-- ══════════ OPTION 2: CINEMATIC BANNER ══════════ -->
+<div class="demo-section">
+  <div class="demo-label">
+    Option 2 — Cinematic Slide-In Banner
+    <span class="tag">Non-blocking</span>
+  </div>
+  <div class="demo-desc">
+    Slides down from the top of the chart area. Doesn't block the chart — user can still see price action.
+    Auto-dismisses with a countdown bar. Compact but high-visibility.
+  </div>
+
+  <!-- BUY CALL version -->
+  <div class="demo-container" style="height: 260px; margin-bottom: 12px;">
+    <div class="fake-chart"></div>
+    <div class="banner-alert">
+      <div class="banner-inner banner-call">
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <div class="banner-signal-badge"><span class="dot"></span> SIGNAL CHANGED</div>
+          <span class="banner-emoji">📈</span>
+        </div>
+        <div class="banner-main">
+          <div class="banner-rec">BUY CALL</div>
+          <div class="banner-sub">
+            <span class="transition">WAIT → BUY CALL</span>
+            <span>Strong bullish signal. Wave 3 in progress.</span>
+          </div>
+        </div>
+        <div class="banner-conf">
+          <div class="banner-conf-pct">80%</div>
+          <div class="banner-conf-label">Strong</div>
+        </div>
+        <div class="banner-dismiss">✕</div>
+      </div>
+      <div class="banner-countdown"><div class="banner-countdown-fill" style="width:75%"></div></div>
+    </div>
+  </div>
+
+  <!-- BUY PUT version -->
+  <div class="demo-container" style="height: 260px;">
+    <div class="fake-chart"></div>
+    <div class="banner-alert">
+      <div class="banner-inner banner-put">
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <div class="banner-signal-badge"><span class="dot"></span> SIGNAL CHANGED</div>
+          <span class="banner-emoji">📉</span>
+        </div>
+        <div class="banner-main">
+          <div class="banner-rec">BUY PUT</div>
+          <div class="banner-sub">
+            <span class="transition">BUY CALL → BUY PUT</span>
+            <span>Bearish reversal. Key resistance hit.</span>
+          </div>
+        </div>
+        <div class="banner-conf">
+          <div class="banner-conf-pct">72%</div>
+          <div class="banner-conf-label">Strong</div>
+        </div>
+        <div class="banner-dismiss">✕</div>
+      </div>
+      <div class="banner-countdown"><div class="banner-countdown-fill" style="width:60%"></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="separator"></div>
+
+<!-- ══════════ OPTION 3: CORNER NOTIFICATION ══════════ -->
+<div class="compare-grid">
+  <div class="demo-section">
+    <div class="demo-label">
+      Option 3 — Corner Notification Card
+      <span class="tag">Non-blocking</span>
+    </div>
+    <div class="demo-desc">
+      Slides in from the bottom-right. Rich details + action button to jump to Trade panel. Non-blocking.
+    </div>
+
+    <div class="demo-container" style="height: 320px;">
+      <div class="fake-chart"></div>
+      <div class="corner-alert">
+        <div class="corner-card corner-call">
+          <div class="corner-header">
+            <div class="corner-badge"><span class="dot"></span> SIGNAL CHANGED</div>
+            <div class="corner-time">just now</div>
+          </div>
+          <div class="corner-body">
+            <div class="corner-signal-row">
+              <span class="corner-emoji">📈</span>
+              <div class="corner-rec">BUY CALL</div>
+              <div class="corner-pct">80%</div>
+            </div>
+            <div class="corner-transition">
+              WAIT <span class="arrow">→</span> BUY CALL
+            </div>
+            <div class="corner-reason">Strong bullish signal. Upward momentum building. Wave 3 in progress.</div>
+          </div>
+          <div class="corner-actions">
+            <button class="corner-btn corner-btn-trade">Open Trade Panel</button>
+            <button class="corner-btn corner-btn-dismiss">Dismiss</button>
+          </div>
+          <div class="corner-countdown"><div class="corner-countdown-fill"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="demo-section">
+    <div class="demo-label">Option 3 — BUY PUT variant</div>
+    <div class="demo-desc">Same layout, bearish theme.</div>
+
+    <div class="demo-container" style="height: 320px;">
+      <div class="fake-chart"></div>
+      <div class="corner-alert">
+        <div class="corner-card corner-put">
+          <div class="corner-header">
+            <div class="corner-badge"><span class="dot"></span> SIGNAL CHANGED</div>
+            <div class="corner-time">3s ago</div>
+          </div>
+          <div class="corner-body">
+            <div class="corner-signal-row">
+              <span class="corner-emoji">📉</span>
+              <div class="corner-rec">BUY PUT</div>
+              <div class="corner-pct">72%</div>
+            </div>
+            <div class="corner-transition">
+              BUY CALL <span class="arrow">→</span> BUY PUT
+            </div>
+            <div class="corner-reason">Bearish reversal detected. Wave 5 completed. Key resistance hit.</div>
+          </div>
+          <div class="corner-actions">
+            <button class="corner-btn corner-btn-trade">Open Trade Panel</button>
+            <button class="corner-btn corner-btn-dismiss">Dismiss</button>
+          </div>
+          <div class="corner-countdown"><div class="corner-countdown-fill" style="width:40%"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="separator"></div>
+
+<!-- ══════════ OPTION 4: TICKER FLASH BAR ══════════ -->
+<div class="demo-section">
+  <div class="demo-label">
+    Option 4 — Full-Width Ticker Flash Bar
+    <span class="tag">Minimal</span>
+  </div>
+  <div class="demo-desc">
+    Slides up from the bottom of the chart. Single-line compact format like a stock ticker.
+    Maximum chart visibility. Ideal for experienced traders who don't want overlay clutter.
+  </div>
+
+  <div class="demo-container" style="height: 240px; margin-bottom: 12px;">
+    <div class="fake-chart"></div>
+    <div class="ticker-alert">
+      <div class="ticker-inner ticker-call">
+        <div class="ticker-flash"></div>
+        <div class="ticker-label">Signal</div>
+        <div class="ticker-divider"></div>
+        <div class="ticker-signal">BUY CALL</div>
+        <div class="ticker-conf">80%</div>
+        <div class="ticker-divider"></div>
+        <div class="ticker-reason">Strong bullish signal. Upward momentum building. Wave 3 in progress. Key indicators align.</div>
+        <div class="ticker-close">✕</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="demo-container" style="height: 240px;">
+    <div class="fake-chart"></div>
+    <div class="ticker-alert">
+      <div class="ticker-inner ticker-put">
+        <div class="ticker-flash"></div>
+        <div class="ticker-label">Signal</div>
+        <div class="ticker-divider"></div>
+        <div class="ticker-signal">BUY PUT</div>
+        <div class="ticker-conf">72%</div>
+        <div class="ticker-divider"></div>
+        <div class="ticker-reason">Bearish reversal detected. Wave 5 completed. Key resistance hit. Expect pullback.</div>
+        <div class="ticker-close">✕</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="separator"></div>
+
+<!-- ══════════ OPTION 5: FLOATING PILL ══════════ -->
+<div class="demo-section">
+  <div class="demo-label">
+    Option 5 — Floating Pill with Pulse Ring
+    <span class="tag">Minimal</span>
+    <span class="tag">Non-blocking</span>
+  </div>
+  <div class="demo-desc">
+    A small floating pill that drops from top-center. Pulse ring draws attention without blocking the chart.
+    Most subtle option — best for users who prefer minimal interruption.
+  </div>
+
+  <div class="compare-grid" style="max-width: unset; margin: 0; padding: 0;">
+    <div class="demo-container" style="height: 220px;">
+      <div class="fake-chart"></div>
+      <div class="pill-alert">
+        <div class="pill-inner pill-call">
+          <div class="pill-dot"></div>
+          <span class="pill-text">BUY CALL</span>
+          <span class="pill-pct">80%</span>
+          <span class="pill-transition">from WAIT</span>
+          <span class="pill-x">✕</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="demo-container" style="height: 220px;">
+      <div class="fake-chart"></div>
+      <div class="pill-alert">
+        <div class="pill-inner pill-put">
+          <div class="pill-dot"></div>
+          <span class="pill-text">BUY PUT</span>
+          <span class="pill-pct">72%</span>
+          <span class="pill-transition">from BUY CALL</span>
+          <span class="pill-x">✕</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="separator"></div>
+
+<!-- ══════════ COMPARISON SUMMARY ══════════ -->
+<div class="demo-section" style="margin-bottom: 60px;">
+  <div class="demo-label">Quick Comparison</div>
+  <table style="width: 100%; font-size: 11px; border-collapse: collapse;">
+    <thead>
+      <tr style="border-bottom: 1px solid #334155;">
+        <th style="text-align: left; padding: 8px; color: #94a3b8;">Option</th>
+        <th style="text-align: center; padding: 8px; color: #94a3b8;">Attention</th>
+        <th style="text-align: center; padding: 8px; color: #94a3b8;">Chart Blocking</th>
+        <th style="text-align: center; padding: 8px; color: #94a3b8;">Detail Level</th>
+        <th style="text-align: center; padding: 8px; color: #94a3b8;">Best For</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 8px; color: #e2e8f0; font-weight: 600;">1. Full-Screen Overlay</td>
+        <td style="text-align: center; padding: 8px; color: #10b981;">★★★★★</td>
+        <td style="text-align: center; padding: 8px; color: #ef4444;">Full block</td>
+        <td style="text-align: center; padding: 8px; color: #10b981;">High</td>
+        <td style="text-align: center; padding: 8px; color: #94a3b8;">Beginners, critical signals</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 8px; color: #e2e8f0; font-weight: 600;">2. Cinematic Banner</td>
+        <td style="text-align: center; padding: 8px; color: #10b981;">★★★★</td>
+        <td style="text-align: center; padding: 8px; color: #fbbf24;">Partial (top)</td>
+        <td style="text-align: center; padding: 8px; color: #10b981;">High</td>
+        <td style="text-align: center; padding: 8px; color: #94a3b8;">Active traders</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 8px; color: #e2e8f0; font-weight: 600;">3. Corner Notification</td>
+        <td style="text-align: center; padding: 8px; color: #fbbf24;">★★★</td>
+        <td style="text-align: center; padding: 8px; color: #10b981;">Minimal</td>
+        <td style="text-align: center; padding: 8px; color: #10b981;">High + Actions</td>
+        <td style="text-align: center; padding: 8px; color: #94a3b8;">Multi-taskers</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 8px; color: #e2e8f0; font-weight: 600;">4. Ticker Flash Bar</td>
+        <td style="text-align: center; padding: 8px; color: #fbbf24;">★★★</td>
+        <td style="text-align: center; padding: 8px; color: #10b981;">Minimal (bottom)</td>
+        <td style="text-align: center; padding: 8px; color: #fbbf24;">Low</td>
+        <td style="text-align: center; padding: 8px; color: #94a3b8;">Pro traders, minimal UI</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px; color: #e2e8f0; font-weight: 600;">5. Floating Pill</td>
+        <td style="text-align: center; padding: 8px; color: #fbbf24;">★★</td>
+        <td style="text-align: center; padding: 8px; color: #10b981;">None</td>
+        <td style="text-align: center; padding: 8px; color: #ef4444;">Minimal</td>
+        <td style="text-align: center; padding: 8px; color: #94a3b8;">Experienced users</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+</body>
+</html>
