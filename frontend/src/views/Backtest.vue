@@ -17,7 +17,7 @@ let resizeObserver = null
 
 const timeframes = ['1M', '5M', '15M', '1H', '4H', '1D']
 const speeds = [0.5, 1, 2, 5, 10, 50]
-const overlayToggles = ref({ waves: true, legs: true, ob: true, fvg: false, bos: false, vwap: false, projectile: true })
+const overlayToggles = ref({ waves: true, legs: true, ob: true, fvg: false, bos: false, vwap: false, projectile: true, fibRetrace: true, fibExt: true })
 const rightPanel = ref('trade') // 'trade' | 'matrix' | 'results'
 
 // Config — use chartStore's persisted symbol as default
@@ -224,6 +224,8 @@ watch(() => rightPanel.value, (v) => {
         { key: 'fvg', label: 'FVG', color: '#06b6d4' },
         { key: 'bos', label: 'BOS', color: '#10b981' },
         { key: 'vwap', label: 'VWAP', color: '#ec4899' },
+        { key: 'fibRetrace', label: 'Fib', color: '#d4a054' },
+        { key: 'fibExt', label: 'Ext', color: '#b08840' },
       ]" :key="o.key">
         <button :class="['overlay-btn', { active: overlayToggles[o.key] }]"
           :style="overlayToggles[o.key] ? `border-color: ${o.color}; color: ${o.color}` : ''"

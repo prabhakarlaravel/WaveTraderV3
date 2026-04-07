@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fibonacci Levels — Correct Wave Mapping</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0f1724; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; padding: 24px; }
+  h1 { text-align: center; font-size: 22px; margin-bottom: 6px; letter-spacing: 1px; }
+  .subtitle { text-align: center; color: #94a3b8; font-size: 13px; margin-bottom: 28px; }
+
+  .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; max-width: 1400px; margin: 0 auto 36px; }
+  .card { background: #1a2332; border-radius: 10px; padding: 20px; border: 1px solid #2a3a4e; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 4px; }
+  .card .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; margin-left: 8px; }
+  .tag.wrong { background: #ef4444; color: #fff; }
+  .tag.correct { background: #22c55e; color: #fff; }
+  .card p { color: #94a3b8; font-size: 12px; margin: 6px 0 14px; line-height: 1.5; }
+
+  /* Chart area */
+  .chart-area { position: relative; background: #131c2a; border-radius: 8px; height: 420px; overflow: hidden; border: 1px solid #1e2d3d; }
+
+  /* SVG styling */
+  .chart-svg { width: 100%; height: 100%; }
+  .wave-line { fill: none; stroke-width: 2; }
+  .wave-label { font-size: 11px; font-weight: 700; text-anchor: middle; }
+  .fib-line { stroke-dasharray: 6 3; }
+  .fib-label { font-size: 9px; font-family: 'Consolas', monospace; }
+  .ext-line { stroke-dasharray: 3 4; }
+  .zone-fill { opacity: 0.08; }
+  .price-label { font-size: 9px; font-family: 'Consolas', monospace; fill: #64748b; text-anchor: end; }
+
+  /* Full width design */
+  .full-card { max-width: 1400px; margin: 0 auto 28px; }
+  .full-card .chart-area { height: 500px; }
+
+  /* Legend */
+  .legend { display: flex; gap: 20px; justify-content: center; margin: 16px 0; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #94a3b8; }
+  .legend-color { width: 24px; height: 3px; border-radius: 2px; }
+  .legend-color.dashed { background: repeating-linear-gradient(90deg, var(--c) 0, var(--c) 6px, transparent 6px, transparent 10px); height: 2px; }
+
+  .info-box { background: #1a2332; border: 1px solid #2a3a4e; border-radius: 8px; padding: 16px 20px; max-width: 1400px; margin: 0 auto 24px; }
+  .info-box h3 { font-size: 13px; color: #d4a054; margin-bottom: 8px; }
+  .info-box ul { list-style: none; padding: 0; }
+  .info-box li { font-size: 12px; color: #94a3b8; padding: 3px 0; line-height: 1.5; }
+  .info-box li::before { content: ""; display: inline-block; width: 6px; height: 6px; background: #d4a054; border-radius: 50%; margin-right: 8px; }
+  .info-box li strong { color: #e2e8f0; }
+</style>
+</head>
+<body>
+
+<h1>Fibonacci Levels — Correct Wave Mapping</h1>
+<p class="subtitle">Using actual NIFTY BANK data: Wave 1 (51,868→52,349), Wave 2 (→51,951), Wave 3 (→52,596)</p>
+
+<!-- Info box explaining the problem -->
+<div class="info-box">
+  <h3>Problem with Current Implementation</h3>
+  <ul>
+    <li><strong>Current:</strong> Shows ONE set of Fib levels from nextTargets — only predicts "where Wave 4 might retrace"</li>
+    <li><strong>Missing:</strong> Wave 1→2 retracement Fib (to validate Wave 2's depth against Wave 1)</li>
+    <li><strong>Missing:</strong> Wave 2→3 extension Fib (to show Wave 3's target achievement relative to Wave 1 length)</li>
+    <li><strong>Fix:</strong> Show per-wave Fib analysis using actual wave anchor points from waveLabels</li>
+  </ul>
+</div>
+
+<!-- Comparison: Current vs Correct -->
+<div class="comparison">
+
+  <!-- CURRENT (Wrong) -->
+  <div class="card">
+    <h2>Current Implementation <span class="tag wrong">WRONG</span></h2>
+    <p>Single Fib set from nextTargets — only shows "Wave 4 might retrace here". Doesn't validate wave structure.</p>
+    <div class="chart-area">
+      <svg class="chart-svg" viewBox="0 0 600 400">
+        <!-- Price axis -->
+        <line x1="530" y1="20" x2="530" y2="380" stroke="#1e2d3d" stroke-width="1"/>
+        <text x="525" y="52" class="price-label">52,600</text>
+        <text x="525" y="112" class="price-label">52,400</text>
+        <text x="525" y="172" class="price-label">52,200</text>
+        <text x="525" y="232" class="price-label">52,000</text>
+        <text x="525" y="292" class="price-label">51,900</text>
+        <text x="525" y="362" class="price-label">51,700</text>
+
+        <!-- Wave path -->
+        <polyline points="40,340 100,300 160,240 200,260 230,200 270,220 310,160 350,100 400,60 440,80 480,40"
+                  class="wave-line" stroke="#8b5cf6" />
+
+        <!-- Wave labels -->
+        <circle cx="40" cy="340" r="10" fill="#1a2332" stroke="#f59e0b" stroke-width="1.5"/>
+        <text x="40" y="344" class="wave-label" fill="#f59e0b">C</text>
+
+        <circle cx="200" cy="260" r="10" fill="#1a2332" stroke="#8b5cf6" stroke-width="1.5"/>
+        <text x="200" y="264" class="wave-label" fill="#8b5cf6">1</text>
+
+        <circle cx="310" cy="160" r="10" fill="#1a2332" stroke="#8b5cf6" stroke-width="1.5"/>
+        <text x="310" y="164" class="wave-label" fill="#8b5cf6">2</text>
+
+        <circle cx="480" cy="40" r="10" fill="#1a2332" stroke="#8b5cf6" stroke-width="1.5"/>
+        <text x="480" y="44" class="wave-label" fill="#8b5cf6">3</text>
+
+        <!-- WRONG: Single Fib set (Wave 4 retracement of Wave 3) -->
+        <!-- 0.000 at Wave 3 top -->
+        <line x1="50" y1="40" x2="525" y2="40" class="fib-line" stroke="#d4a054" stroke-width="1" opacity="0.6"/>
+        <text x="538" y="43" class="fib-label" fill="#d4a054">0.000</text>
+
+        <!-- 0.236 -->
+        <line x1="50" y1="68" x2="525" y2="68" class="fib-line" stroke="#d4a054" stroke-width="1" opacity="0.5"/>
+        <text x="538" y="71" class="fib-label" fill="#d4a054">0.236</text>
+
+        <!-- 0.382 -->
+        <line x1="50" y1="86" x2="525" y2="86" class="fib-line" stroke="#d4a054" stroke-width="1" opacity="0.5"/>
+        <text x="538" y="89" class="fib-label" fill="#d4a054">0.382</text>
+
+        <!-- 0.500 -->
+        <line x1="50" y1="100" x2="525" y2="100" class="fib-line" stroke="#d4a054" stroke-width="1" opacity="0.6"/>
+        <text x="538" y="103" class="fib-label" fill="#d4a054">0.500</text>
+
+        <!-- 0.618 -->
+        <line x1="50" y1="114" x2="525" y2="114" class="fib-line" stroke="#e6b450" stroke-width="1.2" opacity="0.7"/>
+        <text x="538" y="117" class="fib-label" fill="#e6b450">0.618</text>
+
+        <!-- 0.786 -->
+        <line x1="50" y1="134" x2="525" y2="134" class="fib-line" stroke="#d4a054" stroke-width="1" opacity="0.5"/>
+        <text x="538" y="137" class="fib-label" fill="#d4a054">0.786</text>
+
+        <!-- 1.000 at Wave 2 low -->
+        <line x1="50" y1="160" x2="525" y2="160" class="fib-line" stroke="#d4a054" stroke-width="1" opacity="0.6"/>
+        <text x="538" y="163" class="fib-label" fill="#d4a054">1.000</text>
+
+        <!-- Problem annotation -->
+        <rect x="60" y="185" width="220" height="42" rx="4" fill="#ef4444" opacity="0.15" stroke="#ef4444" stroke-width="0.5"/>
+        <text x="72" y="200" font-size="10" fill="#ef4444" font-weight="700">Problem:</text>
+        <text x="72" y="215" font-size="9" fill="#fca5a5">Only shows "where Wave 4 might retrace"</text>
+        <text x="72" y="200" font-size="10" fill="#ef4444" font-weight="700">Problem:</text>
+
+        <!-- Another annotation -->
+        <rect x="60" y="240" width="240" height="42" rx="4" fill="#ef4444" opacity="0.15" stroke="#ef4444" stroke-width="0.5"/>
+        <text x="72" y="255" font-size="10" fill="#ef4444" font-weight="700">Missing:</text>
+        <text x="72" y="270" font-size="9" fill="#fca5a5">No Wave 1→2 retracement or Wave 3 extension</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- CORRECT -->
+  <div class="card">
+    <h2>Correct Implementation <span class="tag correct">FIXED</span></h2>
+    <p>Per-wave Fib analysis: Wave 2 retracement of Wave 1 + Wave 3 extension from Wave 2. Labels identify each.</p>
+    <div class="chart-area">
+      <svg class="chart-svg" viewBox="0 0 600 400">
+        <!-- Price axis -->
+        <line x1="530" y1="20" x2="530" y2="380" stroke="#1e2d3d" stroke-width="1"/>
+        <text x="525" y="52" class="price-label">52,600</text>
+        <text x="525" y="112" class="price-label">52,400</text>
+        <text x="525" y="172" class="price-label">52,200</text>
+        <text x="525" y="232" class="price-label">52,000</text>
+        <text x="525" y="292" class="price-label">51,900</text>
+        <text x="525" y="362" class="price-label">51,700</text>
+
+        <!-- Wave path -->
+        <polyline points="40,340 100,300 160,240 200,260 230,200 270,220 310,160 350,100 400,60 440,80 480,40"
+                  class="wave-line" stroke="#8b5cf6" />
+
+        <!-- Wave labels -->
+        <circle cx="40" cy="340" r="10" fill="#1a2332" stroke="#f59e0b" stroke-width="1.5"/>
+        <text x="40" y="344" class="wave-label" fill="#f59e0b">C</text>
+
+        <circle cx="200" cy="260" r="10" fill="#1a2332" stroke="#8b5cf6" stroke-width="1.5"/>
+        <text x="200" y="264" class="wave-label" fill="#8b5cf6">1</text>
+
+        <circle cx="310" cy="160" r="10" fill="#1a2332" stroke="#8b5cf6" stroke-width="1.5"/>
+        <text x="310" y="164" class="wave-label" fill="#8b5cf6">2</text>
+
+        <circle cx="480" cy="40" r="10" fill="#1a2332" stroke="#8b5cf6" stroke-width="1.5"/>
+        <text x="480" y="44" class="wave-label" fill="#8b5cf6">3</text>
+
+        <!-- ═══ WAVE 1→2 RETRACEMENT FIB (Coral/Salmon tint) ═══ -->
+        <!-- Anchor: Wave 1 start (C low=51,868 → y=340) to Wave 1 end (52,349 → y=120) -->
+        <!-- Wave 1 range in pixels: 340-120 = 220px -->
+
+        <!-- W1 0% = Wave 1 end (top) at y=120 -->
+        <line x1="50" y1="120" x2="340" y2="120" class="fib-line" stroke="#d4a054" stroke-width="0.8" opacity="0.4"/>
+        <rect x="342" y="114" width="105" height="13" rx="2" fill="#d4a054" opacity="0.1"/>
+        <text x="348" y="124" class="fib-label" fill="#d4a054" opacity="0.7">W1→2  0.000</text>
+
+        <!-- W2 retracement 0.382 → y = 120 + 220*0.382 = 204 -->
+        <line x1="50" y1="204" x2="340" y2="204" class="fib-line" stroke="#d4a054" stroke-width="0.8" opacity="0.4"/>
+        <rect x="342" y="198" width="105" height="13" rx="2" fill="#d4a054" opacity="0.1"/>
+        <text x="348" y="208" class="fib-label" fill="#d4a054" opacity="0.7">W1→2  0.382</text>
+
+        <!-- W2 retracement 0.5 → y = 120 + 110 = 230 -->
+        <line x1="50" y1="230" x2="340" y2="230" class="fib-line" stroke="#d4a054" stroke-width="0.8" opacity="0.5"/>
+        <rect x="342" y="224" width="105" height="13" rx="2" fill="#d4a054" opacity="0.1"/>
+        <text x="348" y="234" class="fib-label" fill="#d4a054" opacity="0.8">W1→2  0.500</text>
+
+        <!-- W2 retracement 0.618 → y = 120 + 136 = 256 -->
+        <line x1="50" y1="256" x2="340" y2="256" class="fib-line" stroke="#e6b450" stroke-width="1" opacity="0.6"/>
+        <rect x="342" y="250" width="105" height="13" rx="2" fill="#e6b450" opacity="0.12"/>
+        <text x="348" y="260" class="fib-label" fill="#e6b450" font-weight="700">W1→2  0.618</text>
+
+        <!-- W2 retracement 0.786 → y = 120 + 173 = 293 -->
+        <line x1="50" y1="293" x2="340" y2="293" class="fib-line" stroke="#d4a054" stroke-width="0.8" opacity="0.5"/>
+        <rect x="342" y="287" width="105" height="13" rx="2" fill="#d4a054" opacity="0.1"/>
+        <text x="348" y="297" class="fib-label" fill="#d4a054" opacity="0.7">W1→2  0.786</text>
+
+        <!-- W1 100% = Wave 1 start at y=340 -->
+        <line x1="50" y1="340" x2="340" y2="340" class="fib-line" stroke="#d4a054" stroke-width="0.8" opacity="0.4"/>
+        <rect x="342" y="334" width="105" height="13" rx="2" fill="#d4a054" opacity="0.1"/>
+        <text x="348" y="344" class="fib-label" fill="#d4a054" opacity="0.7">W1→2  1.000</text>
+
+        <!-- Golden Pocket zone 0.5→0.618 -->
+        <rect x="50" y="230" width="290" height="26" fill="#d4a054" opacity="0.06"/>
+        <text x="58" y="248" font-size="8" fill="#d4a054" opacity="0.5" font-weight="600">GOLDEN POCKET</text>
+
+        <!-- Wave 2 actual position marker (shows it retraced ~0.83) -->
+        <line x1="270" y1="160" x2="340" y2="160" stroke="#ef5350" stroke-width="1.5" stroke-dasharray="2 2" opacity="0.7"/>
+        <text x="348" y="164" font-size="8" fill="#ef5350" font-weight="700">W2 actual: 0.828</text>
+        <text x="348" y="174" font-size="7" fill="#ef5350" opacity="0.7">Deep retracement!</text>
+
+        <!-- ═══ WAVE 3 EXTENSION FIB (from Wave 2 end, using Wave 1 length) ═══ -->
+        <!-- Wave 1 length = 220px. Wave 2 end at y=160 -->
+        <!-- 1.0 ext → y = 160 - 220 = -60 (off screen, skip) -->
+        <!-- 0.618 ext → y = 160 - 220*0.618 = 160 - 136 = 24 -->
+        <!-- 1.272 ext → y = 160 - 220*1.272 = 160 - 280 = off screen -->
+
+        <!-- Ext 0.618 → y=24 (near top) -->
+        <!-- Actually let me recalculate. Wave 2 end is at y=160 (price 51,951) -->
+        <!-- Wave 1 length in price = 481, in pixels = 220 -->
+        <!-- Extension goes UP from Wave 2 end: -->
+        <!-- 1.0 ext target = Wave2 + W1length = 160 - 220 = -60 (above chart) -->
+        <!-- Let me use smaller extensions that fit in the chart area -->
+
+        <!-- Since Wave 3 is at y=40 (52,596), let's show extensions that match -->
+        <!-- 1.0 ext = 51,951 + 481 = 52,432 → between Wave 1 end and Wave 3 -->
+        <!-- In pixels: y = 160 - 220*1.0 = -60... that doesn't work with this scale -->
+
+        <!-- Let me adjust: The wave 3 at y=40 means from Wave 2 (y=160) to Wave 3 (y=40) = 120px -->
+        <!-- Wave 1 pixel length going up from Wave 2: need to rescale -->
+        <!-- Actually the issue is the chart is compressed. Let me draw extensions from right side -->
+
+        <!-- Extension lines (drawn from Wave 2 onward, right portion of chart) -->
+        <!-- 1.0 extension at y=95 (52,432) -->
+        <line x1="310" y1="95" x2="525" y2="95" class="ext-line" stroke="#b08840" stroke-width="1" opacity="0.5"/>
+        <rect x="455" y="88" width="68" height="14" rx="2" fill="#b08840" opacity="0.08" stroke="#b08840" stroke-width="0.5" opacity="0.2"/>
+        <text x="461" y="99" class="fib-label" fill="#b08840" font-weight="700">Ext 1.000</text>
+
+        <!-- 1.272 extension at y=60 (52,563) -->
+        <line x1="310" y1="60" x2="525" y2="60" class="ext-line" stroke="#b08840" stroke-width="1" opacity="0.5"/>
+        <rect x="455" y="53" width="68" height="14" rx="2" fill="#b08840" opacity="0.08" stroke="#b08840" stroke-width="0.5" opacity="0.2"/>
+        <text x="461" y="64" class="fib-label" fill="#b08840" font-weight="700">Ext 1.272</text>
+
+        <!-- 1.618 extension at y=18 (52,729) -->
+        <line x1="310" y1="18" x2="525" y2="18" class="ext-line" stroke="#b08840" stroke-width="1.2" opacity="0.6"/>
+        <rect x="455" y="11" width="68" height="14" rx="2" fill="#b08840" opacity="0.12" stroke="#b08840" stroke-width="0.5"/>
+        <text x="461" y="22" class="fib-label" fill="#b08840" font-weight="700">Ext 1.618</text>
+        <!-- Pulse animation on 1.618 target -->
+        <circle cx="450" cy="18" r="3" fill="#b08840" opacity="0.6">
+          <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
+          <animate attributeName="opacity" values="0.6;0.2;0.6" dur="2s" repeatCount="indefinite"/>
+        </circle>
+
+        <!-- Wave 3 actual hit annotation -->
+        <line x1="440" y1="40" x2="520" y2="40" stroke="#22c55e" stroke-width="1" stroke-dasharray="2 2" opacity="0.6"/>
+        <text x="460" y="50" font-size="7" fill="#22c55e" font-weight="600">W3 hit: 1.342x</text>
+
+        <!-- Bracket showing extension zone -->
+        <rect x="310" y="18" width="130" height="77" fill="none" stroke="#b08840" stroke-width="0.5" stroke-dasharray="2 2" opacity="0.2" rx="2"/>
+        <text x="315" y="30" font-size="7" fill="#b08840" opacity="0.5">W3 EXTENSION ZONE</text>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<!-- Full-width: Complete Correct Design -->
+<div class="card full-card">
+  <h2>Design: Complete Wave-Mapped Fibonacci <span class="tag correct">RECOMMENDED</span></h2>
+  <p>Shows both retracement + extension Fib levels with clear wave-pair labels. Retracement spans Wave 1 region, extensions project forward from Wave 2.</p>
+
+  <div class="legend">
+    <div class="legend-item">
+      <div class="legend-color" style="background: #8b5cf6;"></div>
+      Wave path (existing)
+    </div>
+    <div class="legend-item">
+      <div class="legend-color dashed" style="--c: #d4a054;"></div>
+      W1→2 Retracement Fib
+    </div>
+    <div class="legend-item">
+      <div class="legend-color dashed" style="--c: #b08840;"></div>
+      W3 Extension Fib
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background: rgba(212,160,84,0.15);"></div>
+      Golden Pocket zone
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background: rgba(176,136,64,0.12);"></div>
+      Extension target zone
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #ef5350;"></div>
+      Invalidation level
+    </div>
+  </div>
+
+  <div class="chart-area">
+    <svg class="chart-svg" viewBox="0 0 1200 480">
+      <!-- Grid lines -->
+      <line x1="0" y1="60" x2="1100" y2="60" stroke="#1e2d3d" stroke-width="0.5"/>
+      <line x1="0" y1="120" x2="1100" y2="120" stroke="#1e2d3d" stroke-width="0.5"/>
+      <line x1="0" y1="180" x2="1100" y2="180" stroke="#1e2d3d" stroke-width="0.5"/>
+      <line x1="0" y1="240" x2="1100" y2="240" stroke="#1e2d3d" stroke-width="0.5"/>
+      <line x1="0" y1="300" x2="1100" y2="300" stroke="#1e2d3d" stroke-width="0.5"/>
+      <line x1="0" y1="360" x2="1100" y2="360" stroke="#1e2d3d" stroke-width="0.5"/>
+      <line x1="0" y1="420" x2="1100" y2="420" stroke="#1e2d3d" stroke-width="0.5"/>
+
+      <!-- Price axis -->
+      <line x1="1100" y1="20" x2="1100" y2="460" stroke="#2a3a4e" stroke-width="1"/>
+      <text x="1110" y="45" class="price-label" text-anchor="start">52,730</text>
+      <text x="1110" y="65" class="price-label" text-anchor="start">52,600</text>
+      <text x="1110" y="105" class="price-label" text-anchor="start">52,500</text>
+      <text x="1110" y="145" class="price-label" text-anchor="start">52,400</text>
+      <text x="1110" y="200" class="price-label" text-anchor="start">52,200</text>
+      <text x="1110" y="240" class="price-label" text-anchor="start">52,100</text>
+      <text x="1110" y="290" class="price-label" text-anchor="start">51,951</text>
+      <text x="1110" y="350" class="price-label" text-anchor="start">51,868</text>
+      <text x="1110" y="435" class="price-label" text-anchor="start">51,600</text>
+
+      <!-- ═══ WAVE PATH ═══ -->
+      <!-- Correction A-B-C before Wave 1 -->
+      <polyline points="30,200 80,340 120,260 170,380"
+                class="wave-line" stroke="#f59e0b" stroke-width="1.5" opacity="0.6"/>
+      <!-- Sub-wave labels for correction -->
+      <circle cx="30" cy="200" r="9" fill="#1a2332" stroke="#f59e0b" stroke-width="1.5"/>
+      <text x="30" y="204" class="wave-label" fill="#f59e0b" font-size="9">A</text>
+      <circle cx="80" cy="340" r="9" fill="#1a2332" stroke="#f59e0b" stroke-width="1.5"/>
+      <text x="80" y="344" class="wave-label" fill="#f59e0b" font-size="9">B</text>
+      <circle cx="170" cy="380" r="9" fill="#1a2332" stroke="#f59e0b" stroke-width="1.5"/>
+      <text x="170" y="384" class="wave-label" fill="#f59e0b" font-size="9">C</text>
+
+      <!-- Wave 1: C low (51,868) → Wave 1 high (52,349) -->
+      <!-- C at y=380 (51,868), Wave 1 end at y=155 (52,349) -->
+      <polyline points="170,380 240,340 300,280 340,310 400,240 430,260 500,155"
+                class="wave-line" stroke="#8b5cf6" stroke-width="2"/>
+
+      <!-- Sub-legs of Wave 1 -->
+      <circle cx="240" cy="340" r="6" fill="#1a2332" stroke="#22d3ee" stroke-width="1"/>
+      <text x="240" y="343" font-size="7" fill="#22d3ee" text-anchor="middle" font-weight="700">i</text>
+      <circle cx="340" cy="310" r="6" fill="#1a2332" stroke="#22d3ee" stroke-width="1"/>
+      <text x="340" y="313" font-size="7" fill="#22d3ee" text-anchor="middle" font-weight="700">ii</text>
+      <circle cx="430" cy="260" r="6" fill="#1a2332" stroke="#22d3ee" stroke-width="1"/>
+      <text x="430" y="263" font-size="7" fill="#22d3ee" text-anchor="middle" font-weight="700">iv</text>
+
+      <!-- Wave 1 label -->
+      <circle cx="500" cy="155" r="12" fill="#1a2332" stroke="#8b5cf6" stroke-width="2"/>
+      <text x="500" y="159" class="wave-label" fill="#8b5cf6">1</text>
+
+      <!-- Wave 2: retraces down to 51,951 → y=288 -->
+      <polyline points="500,155 550,200 600,230 640,210 680,288"
+                class="wave-line" stroke="#8b5cf6" stroke-width="2"/>
+      <circle cx="680" cy="288" r="12" fill="#1a2332" stroke="#8b5cf6" stroke-width="2"/>
+      <text x="680" y="292" class="wave-label" fill="#8b5cf6">2</text>
+
+      <!-- Wave 3: extends up to 52,596 → y=65 -->
+      <polyline points="680,288 730,250 780,200 810,220 860,150 890,170 950,100 980,80 1040,65"
+                class="wave-line" stroke="#34d399" stroke-width="2"/>
+      <circle cx="1040" cy="65" r="12" fill="#1a2332" stroke="#34d399" stroke-width="2"/>
+      <text x="1040" y="69" class="wave-label" fill="#34d399">3</text>
+
+      <!-- ═══ FIB SET 1: WAVE 1→2 RETRACEMENT ═══ -->
+      <!-- Anchor: Wave 1 start (C low, y=380) to Wave 1 end (y=155) -->
+      <!-- Range = 225px -->
+      <!-- These lines span from left to Wave 2 area (x=50 to x=700) -->
+
+      <!-- 0.000 (Wave 1 top) y=155 -->
+      <line x1="50" y1="155" x2="700" y2="155" class="fib-line" stroke="#d4a054" stroke-width="0.8" opacity="0.5"/>
+      <rect x="540" y="148" width="92" height="14" rx="2" fill="rgba(212,160,84,0.08)"/>
+      <text x="546" y="159" class="fib-label" fill="#d4a054" font-size="8">W1→2  0%</text>
+      <text x="636" y="159" class="fib-label" fill="#64748b" font-size="7">52,349</text>
+
+      <!-- 0.236 → y = 155 + 225*0.236 = 208 -->
+      <line x1="50" y1="208" x2="700" y2="208" class="fib-line" stroke="#d4a054" stroke-width="0.6" opacity="0.35"/>
+      <rect x="540" y="201" width="92" height="14" rx="2" fill="rgba(212,160,84,0.06)"/>
+      <text x="546" y="212" class="fib-label" fill="#d4a054" opacity="0.7" font-size="8">W1→2  23.6%</text>
+
+      <!-- 0.382 → y = 155 + 86 = 241 -->
+      <line x1="50" y1="241" x2="700" y2="241" class="fib-line" stroke="#d4a054" stroke-width="0.6" opacity="0.4"/>
+      <rect x="540" y="234" width="92" height="14" rx="2" fill="rgba(212,160,84,0.06)"/>
+      <text x="546" y="245" class="fib-label" fill="#d4a054" opacity="0.7" font-size="8">W1→2  38.2%</text>
+
+      <!-- 0.500 → y = 155 + 112 = 267 -->
+      <line x1="50" y1="267" x2="700" y2="267" class="fib-line" stroke="#d4a054" stroke-width="0.8" opacity="0.5"/>
+      <rect x="540" y="260" width="92" height="14" rx="2" fill="rgba(212,160,84,0.08)"/>
+      <text x="546" y="271" class="fib-label" fill="#d4a054" font-size="8">W1→2  50%</text>
+
+      <!-- Golden Pocket zone: 0.5→0.618 (y=267 to y=294) -->
+      <rect x="50" y="267" width="650" height="27" fill="#d4a054" opacity="0.06"/>
+      <text x="56" y="284" font-size="8" fill="#d4a054" opacity="0.4" font-weight="600" letter-spacing="1">GOLDEN POCKET</text>
+
+      <!-- 0.618 → y = 155 + 139 = 294 -->
+      <line x1="50" y1="294" x2="700" y2="294" class="fib-line" stroke="#e6b450" stroke-width="1.2" opacity="0.7"/>
+      <rect x="540" y="287" width="92" height="14" rx="2" fill="rgba(230,180,80,0.12)"/>
+      <text x="546" y="298" class="fib-label" fill="#e6b450" font-weight="700" font-size="8">W1→2  61.8%</text>
+
+      <!-- OTE zone: 0.618→0.786 (y=294 to y=332) -->
+      <rect x="50" y="294" width="650" height="38" fill="#e6b450" opacity="0.04"/>
+      <rect x="50" y="294" width="3" height="38" fill="#e6b450" opacity="0.3" rx="1"/>
+      <text x="58" y="318" font-size="7" fill="#e6b450" opacity="0.4" font-weight="600">OTE ZONE</text>
+
+      <!-- 0.786 → y = 155 + 177 = 332 -->
+      <line x1="50" y1="332" x2="700" y2="332" class="fib-line" stroke="#d4a054" stroke-width="0.8" opacity="0.5"/>
+      <rect x="540" y="325" width="92" height="14" rx="2" fill="rgba(212,160,84,0.06)"/>
+      <text x="546" y="336" class="fib-label" fill="#d4a054" opacity="0.7" font-size="8">W1→2  78.6%</text>
+
+      <!-- 1.000 (Wave 1 start) y=380 -->
+      <line x1="50" y1="380" x2="700" y2="380" class="fib-line" stroke="#d4a054" stroke-width="0.8" opacity="0.5"/>
+      <rect x="540" y="373" width="92" height="14" rx="2" fill="rgba(212,160,84,0.06)"/>
+      <text x="546" y="384" class="fib-label" fill="#d4a054" opacity="0.7" font-size="8">W1→2  100%</text>
+      <text x="636" y="384" class="fib-label" fill="#64748b" font-size="7">51,868</text>
+
+      <!-- Wave 2 actual position marker at y=288 -->
+      <circle cx="680" cy="288" r="4" fill="#ef5350" opacity="0.8"/>
+      <line x1="635" y1="288" x2="680" y2="288" stroke="#ef5350" stroke-width="1.5" stroke-dasharray="3 2" opacity="0.7"/>
+      <rect x="540" y="281" width="92" height="14" rx="2" fill="rgba(239,83,80,0.12)" stroke="#ef5350" stroke-width="0.5" opacity="0.5"/>
+      <text x="546" y="292" font-size="8" fill="#ef5350" font-weight="700">W2: 82.8%</text>
+
+      <!-- ═══ FIB SET 2: WAVE 3 EXTENSIONS (from Wave 2, using Wave 1 length) ═══ -->
+      <!-- Wave 1 pixel length = 225. Wave 2 end at y=288 -->
+      <!-- Extensions project UPWARD from Wave 2 end -->
+      <!-- 1.0x → y = 288 - 225 = 63 -->
+      <!-- 1.272x → y = 288 - 225*1.272 = 288 - 286 = 2 (near top) -->
+      <!-- 1.618x → y = 288 - 225*1.618 = 288 - 364 = off screen -->
+
+      <!-- 0.618 ext → y = 288 - 225*0.618 = 288 - 139 = 149 -->
+      <line x1="680" y1="149" x2="1090" y2="149" class="ext-line" stroke="#b08840" stroke-width="0.8" opacity="0.4"/>
+      <rect x="1000" y="142" width="85" height="14" rx="2" fill="rgba(176,136,64,0.08)"/>
+      <text x="1006" y="153" class="fib-label" fill="#b08840" font-size="8">Ext 0.618</text>
+
+      <!-- 1.0 ext → y = 63 -->
+      <line x1="680" y1="63" x2="1090" y2="63" class="ext-line" stroke="#b08840" stroke-width="1" opacity="0.5"/>
+      <rect x="1000" y="56" width="85" height="14" rx="2" fill="rgba(176,136,64,0.1)" stroke="#b08840" stroke-width="0.5" opacity="0.3"/>
+      <text x="1006" y="67" class="fib-label" fill="#b08840" font-weight="700" font-size="8">Ext 1.000</text>
+      <text x="1050" y="77" class="fib-label" fill="#64748b" font-size="7">52,432</text>
+
+      <!-- Extension target zone 1.0→1.618 -->
+      <rect x="680" y="2" width="410" height="61" fill="#b08840" opacity="0.04" rx="2"/>
+
+      <!-- 1.272 ext → y = 2 -->
+      <line x1="680" y1="2" x2="1090" y2="2" class="ext-line" stroke="#b08840" stroke-width="1" opacity="0.5"/>
+      <rect x="1000" y="-5" width="85" height="14" rx="2" fill="rgba(176,136,64,0.12)" stroke="#b08840" stroke-width="0.5"/>
+      <text x="1006" y="6" class="fib-label" fill="#b08840" font-weight="700" font-size="8">Ext 1.272</text>
+      <text x="1050" y="16" class="fib-label" fill="#64748b" font-size="7">52,563</text>
+
+      <!-- 1.618 would be above chart — show arrow indicator -->
+      <line x1="1085" y1="2" x2="1085" y2="-10" stroke="#b08840" stroke-width="1.5" opacity="0.6" marker-end="url(#arrowUp)"/>
+      <defs>
+        <marker id="arrowUp" viewBox="0 0 6 6" refX="3" refY="6" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,6 L3,0 L6,6" fill="#b08840"/>
+        </marker>
+      </defs>
+      <text x="1060" y="-5" font-size="7" fill="#b08840" opacity="0.7" font-weight="600">1.618 (52,729)</text>
+
+      <!-- Wave 3 actual hit (y=65) — between 1.0 and 1.272 -->
+      <circle cx="1040" cy="65" r="4" fill="#22c55e" opacity="0.8"/>
+      <rect x="1000" y="82" width="85" height="14" rx="2" fill="rgba(34,197,94,0.12)" stroke="#22c55e" stroke-width="0.5" opacity="0.5"/>
+      <text x="1006" y="93" font-size="8" fill="#22c55e" font-weight="700">W3: 1.342x</text>
+
+      <!-- ═══ INVALIDATION LEVEL ═══ -->
+      <!-- Wave 4 must not go below Wave 1 territory = Wave 1 end (52,349) → y=155 -->
+      <!-- Actually for impulse: Wave 4 must not overlap Wave 1 END price -->
+      <!-- But the backend says invalidation at 51,950 (Wave 2 low) which is W4 must not overlap W1 start -->
+      <!-- Show it at y=290 -->
+      <line x1="680" y1="290" x2="1090" y2="290" stroke="#ef5350" stroke-width="1" stroke-dasharray="8 4" opacity="0.5"/>
+      <rect x="680" y="295" width="120" height="13" rx="2" fill="rgba(239,83,80,0.1)"/>
+      <text x="686" y="305" font-size="8" fill="#ef5350" font-weight="600">INVALIDATION 51,951</text>
+      <text x="686" y="316" font-size="7" fill="#ef5350" opacity="0.6">W4 must not overlap W1</text>
+
+      <!-- ═══ ANNOTATIONS ═══ -->
+      <!-- Arrow showing "retracement zone" -->
+      <rect x="60" y="400" width="200" height="50" rx="6" fill="rgba(212,160,84,0.08)" stroke="#d4a054" stroke-width="0.5" opacity="0.5"/>
+      <text x="72" y="418" font-size="9" fill="#d4a054" font-weight="700">Retracement Fibs (W1→W2)</text>
+      <text x="72" y="432" font-size="8" fill="#94a3b8">Span: Wave 1 start to Wave 1 end</text>
+      <text x="72" y="444" font-size="8" fill="#94a3b8">Shows how deep Wave 2 retraced</text>
+
+      <rect x="720" y="400" width="220" height="50" rx="6" fill="rgba(176,136,64,0.08)" stroke="#b08840" stroke-width="0.5" opacity="0.5"/>
+      <text x="732" y="418" font-size="9" fill="#b08840" font-weight="700">Extension Fibs (W3 targets)</text>
+      <text x="732" y="432" font-size="8" fill="#94a3b8">W1 length projected from W2 end</text>
+      <text x="732" y="444" font-size="8" fill="#94a3b8">Shows Wave 3 extension achievement</text>
+
+      <!-- Time labels at bottom -->
+      <text x="170" y="470" font-size="8" fill="#475569" text-anchor="middle">C (start)</text>
+      <text x="500" y="470" font-size="8" fill="#475569" text-anchor="middle">Wave 1</text>
+      <text x="680" y="470" font-size="8" fill="#475569" text-anchor="middle">Wave 2</text>
+      <text x="1040" y="470" font-size="8" fill="#475569" text-anchor="middle">Wave 3</text>
+    </svg>
+  </div>
+</div>
+
+<!-- Implementation plan info box -->
+<div class="info-box">
+  <h3>Implementation Plan</h3>
+  <ul>
+    <li><strong>Data source:</strong> Use <code>waveLabels[]</code> to find the last impulse set (1→2→3→...) and extract anchor prices</li>
+    <li><strong>Fib Set 1 (Retracement):</strong> Wave 1 start price → Wave 1 end price. Draw 0%, 23.6%, 38.2%, 50%, 61.8%, 78.6%, 100% levels spanning left portion of chart</li>
+    <li><strong>Fib Set 2 (Extension):</strong> Project Wave 1 length from Wave 2 end. Draw 0.618x, 1.0x, 1.272x, 1.618x levels spanning right portion of chart</li>
+    <li><strong>Dynamic:</strong> Which Fib sets to show depends on <code>nextTargets.currentWave</code> — if in Wave 3, show W1→2 retrace + W3 extensions</li>
+    <li><strong>Labels:</strong> Always prefix with wave pair (W1→2, Ext) so user knows which Fib belongs to which wave</li>
+    <li><strong>Zones:</strong> Golden Pocket (50%→61.8%) and OTE (61.8%→78.6%) as shaded SVG regions</li>
+    <li><strong>Actual marker:</strong> Show where the actual wave landed vs the Fib levels (e.g., "W2: 82.8%")</li>
+    <li><strong>Colors:</strong> Keep Warm Gold palette — retracement in #d4a054, extensions in #b08840 (slightly dimmer)</li>
+  </ul>
+</div>
+
+</body>
+</html>
