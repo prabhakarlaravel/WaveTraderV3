@@ -87,7 +87,8 @@ class ConfluenceEngine
         $weightedBear = 0.0;
         $rawBullCount = 0;
         $rawBearCount = 0;
-        $agreeingEngines = 0; // how many engines have at least 1 directional signal
+        $agreeingEngines = 0;
+        $allDirectionalSignals = []; // Collect for price-zone analysis
 
         foreach ($engineResults as $engineKey => $result) {
             $engineWeight = self::ENGINE_WEIGHTS[$engineKey] ?? 1.0;
@@ -96,17 +97,39 @@ class ConfluenceEngine
 
             foreach ($result->signals as $signal) {
                 $dir = $signal['direction'] ?? '';
+
+                // Signal recency weighting: signals with a recent candle_timestamp
+                // get 2x count vs older signals (if timestamp is available)
+                $recencyMultiplier = 1;
+                if (isset($signal['candle_timestamp'])) {
+                    try {
+                        $signalAge = now()->diffInMinutes(\Carbon\Carbon::parse($signal['candle_timestamp']));
+                        // "Recent" = within last 5 candle periods (rough heuristic)
+                        $recencyMultiplier = $signalAge < 30 ? 2 : 1;
+                    } catch (\Throwable $e) {
+                        // Ignore parse errors
+                    }
+                }
+
                 if ($dir === 'buy') {
-                    $engineBull++;
+                    $engineBull += $recencyMultiplier;
                     $rawBullCount++;
                 }
                 if ($dir === 'sell') {
-                    $engineBear++;
+                    $engineBear += $recencyMultiplier;
                     $rawBearCount++;
+                }
+
+                // Collect for price-zone clustering
+                if ($dir === 'buy' || $dir === 'sell') {
+                    $allDirectionalSignals[] = [
+                        'engine' => $engineKey,
+                        'direction' => $dir,
+                        'price' => (float) ($signal['entry'] ?? 0),
+                    ];
                 }
             }
 
-            // Each engine votes once (net direction) with its weight
             if ($engineBull > $engineBear) {
                 $weightedBull += $engineWeight;
                 $agreeingEngines++;
@@ -115,6 +138,19 @@ class ConfluenceEngine
                 $agreeingEngines++;
             }
         }
+
+        // ── Phase 2b: Price-zone clustering ──
+        // Check how many DIFFERENT engines have signals within 0.5% of current price
+        $zoneEngines = [];
+        if ($currentPrice > 0) {
+            $zoneTolerance = $currentPrice * 0.005; // 0.5%
+            foreach ($allDirectionalSignals as $sig) {
+                if ($sig['price'] > 0 && abs($sig['price'] - $currentPrice) <= $zoneTolerance) {
+                    $zoneEngines[$sig['engine']] = true;
+                }
+            }
+        }
+        $zoneAgreement = count($zoneEngines);
 
         $direction = 'NEUTRAL';
         if ($weightedBull > $weightedBear) {
@@ -139,6 +175,7 @@ class ConfluenceEngine
             'trigger_ok' => $triggerScore['score'] >= 10,        // BOS/CHOCH confirmed
             'engines_agree' => $agreeingEngines >= 2,            // At least 2 engines agree
             'wave_health_ok' => ($ewResult->metadata['health_score'] ?? 0) >= 50,
+            'zone_agree' => $zoneAgreement >= 2,                 // 2+ engines at same price zone
         ];
 
         $gatesPassed = count(array_filter($gateChecks));
@@ -202,6 +239,21 @@ class ConfluenceEngine
         if ($agreeingEngines >= 4) {
             $adjustedPct += 10;
             $adjustments[] = "{$agreeingEngines} engines agree (+10%)";
+        }
+
+        // +12 if 3+ engines agree at the same price zone (strong confluence)
+        if ($zoneAgreement >= 3) {
+            $adjustedPct += 12;
+            $adjustments[] = "{$zoneAgreement} engines at same price zone (+12%)";
+        } elseif ($zoneAgreement >= 2) {
+            $adjustedPct += 6;
+            $adjustments[] = "{$zoneAgreement} engines at same price zone (+6%)";
+        }
+
+        // -15 if no engines agree at the same price zone
+        if ($zoneAgreement === 0 && $agreeingEngines >= 2) {
+            $adjustedPct -= 15;
+            $adjustments[] = 'No price-zone agreement (-15%)';
         }
 
         // Confidence adjustment based on wave position
@@ -307,6 +359,7 @@ class ConfluenceEngine
             'weighted_bull' => round($weightedBull, 2),
             'weighted_bear' => round($weightedBear, 2),
             'engines_agreeing' => $agreeingEngines,
+            'zone_agreement' => $zoneAgreement,
         ];
     }
 

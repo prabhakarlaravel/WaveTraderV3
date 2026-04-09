@@ -6,6 +6,10 @@ namespace App\Engines;
 
 class OrderBlockEngine implements EngineInterface
 {
+    private const IMPULSE_MULT_MAP = [
+        '1M' => 1.2, '5M' => 1.3, '15M' => 1.5, '1H' => 1.6, '4H' => 1.8, '1D' => 2.0,
+    ];
+
     private int $atrPeriod;
     private float $impulseMultiplier;
 
@@ -21,8 +25,9 @@ class OrderBlockEngine implements EngineInterface
             return new EngineResult(engine: 'order_block', symbol: $symbol, timeframe: $timeframe);
         }
 
+        $multiplier = self::IMPULSE_MULT_MAP[$timeframe] ?? $this->impulseMultiplier;
         $atr = $this->calculateATR($candles, $this->atrPeriod);
-        $orderBlocks = $this->detectOrderBlocks($candles, $atr);
+        $orderBlocks = $this->detectOrderBlocks($candles, $atr, $multiplier);
         $this->updateMitigationStatus($orderBlocks, $candles);
 
         return new EngineResult(
@@ -38,18 +43,19 @@ class OrderBlockEngine implements EngineInterface
         );
     }
 
-    private function detectOrderBlocks(array $candles, array $atr): array
+    private function detectOrderBlocks(array $candles, array $atr, float $multiplier): array
     {
         $orderBlocks = [];
+        $candleCount = count($candles);
 
-        for ($i = 2; $i < count($candles); $i++) {
+        for ($i = 2; $i < $candleCount; $i++) {
             if (! isset($atr[$i])) {
                 continue;
             }
 
             $curr = $candles[$i];
             $prev = $candles[$i - 1];
-            $threshold = $atr[$i] * $this->impulseMultiplier;
+            $threshold = $atr[$i] * $multiplier;
 
             $currBody = abs((float) $curr['close'] - (float) $curr['open']);
             $currDirection = (float) $curr['close'] > (float) $curr['open'] ? 'bullish' : 'bearish';
@@ -57,26 +63,50 @@ class OrderBlockEngine implements EngineInterface
 
             // Bullish OB: bearish candle followed by strong bullish impulse
             if ($currDirection === 'bullish' && $prevDirection === 'bearish' && $currBody > $threshold) {
+                // Require at least 1 continuation candle in the same direction
+                if (! isset($candles[$i + 1]) || (float) $candles[$i + 1]['close'] <= (float) $candles[$i + 1]['open']) {
+                    continue;
+                }
+
+                $strength = min(100, (int) (($currBody / $atr[$i]) * 40));
+
+                // Boost strength by 15 if 2 consecutive continuation candles exist
+                if (isset($candles[$i + 2]) && (float) $candles[$i + 2]['close'] > (float) $candles[$i + 2]['open']) {
+                    $strength = min(100, $strength + 15);
+                }
+
                 $orderBlocks[] = [
                     'type' => 'bullish',
                     'high' => (float) $prev['high'],
                     'low' => (float) $prev['low'],
                     'formed_at' => $prev['timestamp'],
                     'status' => 'fresh',
-                    'strength' => min(100, (int) (($currBody / $atr[$i]) * 40)),
+                    'strength' => $strength,
                     'timeframe' => '', // filled by caller
                 ];
             }
 
             // Bearish OB: bullish candle followed by strong bearish impulse
             if ($currDirection === 'bearish' && $prevDirection === 'bullish' && $currBody > $threshold) {
+                // Require at least 1 continuation candle in the same direction
+                if (! isset($candles[$i + 1]) || (float) $candles[$i + 1]['close'] >= (float) $candles[$i + 1]['open']) {
+                    continue;
+                }
+
+                $strength = min(100, (int) (($currBody / $atr[$i]) * 40));
+
+                // Boost strength by 15 if 2 consecutive continuation candles exist
+                if (isset($candles[$i + 2]) && (float) $candles[$i + 2]['close'] < (float) $candles[$i + 2]['open']) {
+                    $strength = min(100, $strength + 15);
+                }
+
                 $orderBlocks[] = [
                     'type' => 'bearish',
                     'high' => (float) $prev['high'],
                     'low' => (float) $prev['low'],
                     'formed_at' => $prev['timestamp'],
                     'status' => 'fresh',
-                    'strength' => min(100, (int) (($currBody / $atr[$i]) * 40)),
+                    'strength' => $strength,
                     'timeframe' => '',
                 ];
             }

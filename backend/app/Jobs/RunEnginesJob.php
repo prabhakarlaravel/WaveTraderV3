@@ -62,21 +62,22 @@ class RunEnginesJob implements ShouldQueue, ShouldBeUnique
             return;
         }
 
-        // Run all engines with named results
+        // Run engines in two phases:
+        // Phase 1: Level-producing engines (OB, FVG, SMC, VWAP, EW, MS)
+        // Phase 2: PriceAction with injected confluence levels from Phase 1
         $results = [];
         $allSignals = [];
 
-        $engineMap = [
+        $phase1Engines = [
             'market_structure' => new MarketStructureEngine(),
             'order_block' => new OrderBlockEngine(),
             'fvg' => new FVGEngine(),
-            'price_action' => new PriceActionEngine(),
             'elliott_wave' => new ElliottWaveEngine(),
             'smc' => new SMCEngine(),
             'vwap' => new VWAPEngine(),
         ];
 
-        foreach ($engineMap as $key => $engine) {
+        foreach ($phase1Engines as $key => $engine) {
             try {
                 $result = $engine->run($candles, $symbol->ticker, $this->timeframe);
                 $results[$key] = $result;
@@ -86,6 +87,20 @@ class RunEnginesJob implements ShouldQueue, ShouldBeUnique
                 Log::error("Engine {$key} failed: {$e->getMessage()}");
                 $results[$key] = null;
             }
+        }
+
+        // Phase 2: PriceAction with confluence levels from Phase 1
+        $confluenceLevels = $this->extractConfluenceLevels($results, $candles);
+        $paEngine = new PriceActionEngine();
+        $paEngine->setConfluenceLevels($confluenceLevels);
+        try {
+            $result = $paEngine->run($candles, $symbol->ticker, $this->timeframe);
+            $results['price_action'] = $result;
+            $this->persistResult($result, $symbol->id);
+            $allSignals = array_merge($allSignals, $result->signals);
+        } catch (\Throwable $e) {
+            Log::error("Engine price_action failed: {$e->getMessage()}");
+            $results['price_action'] = null;
         }
 
         // Build and cache full overlay payload
@@ -200,34 +215,79 @@ class RunEnginesJob implements ShouldQueue, ShouldBeUnique
     }
 
     /**
-     * Compute HTF bias by reading cached overlay trends from 1D, 4H, 1H.
-     * Returns 'BULL', 'BEAR', or 'NEUTRAL'.
+     * Compute weighted HTF bias from 1D, 4H, 1H cached trends.
+     * 1D carries 3x weight, 4H carries 2x, 1H carries 1x.
      */
     private function computeHtfBias(int $symbolId): string
     {
-        $htfTimeframes = ['1D', '4H', '1H'];
-        $bullCount = 0;
-        $bearCount = 0;
+        $htfWeights = ['1D' => 3, '4H' => 2, '1H' => 1];
+        $bullScore = 0;
+        $bearScore = 0;
 
-        foreach ($htfTimeframes as $tf) {
+        foreach ($htfWeights as $tf => $weight) {
             $cached = self::getCachedOverlays($symbolId, $tf);
             $trend = $cached['metadata']['trend'] ?? 'neutral';
 
             if ($trend === 'bullish') {
-                $bullCount++;
+                $bullScore += $weight;
             } elseif ($trend === 'bearish') {
-                $bearCount++;
+                $bearScore += $weight;
             }
         }
 
-        if ($bullCount > $bearCount) {
+        // Need at least 2 weighted points to declare a bias (avoids 1H-only bias)
+        if ($bullScore >= 2 && $bullScore > $bearScore) {
             return 'BULL';
         }
-        if ($bearCount > $bullCount) {
+        if ($bearScore >= 2 && $bearScore > $bullScore) {
             return 'BEAR';
         }
 
         return 'NEUTRAL';
+    }
+
+    /**
+     * Extract key price levels from Phase 1 engine results for PriceAction context.
+     */
+    private function extractConfluenceLevels(array $results, array $candles): array
+    {
+        $levels = [];
+
+        // Fresh order block midpoints
+        if ($results['order_block'] ?? null) {
+            foreach ($results['order_block']->overlays['orderBlocks'] ?? [] as $ob) {
+                if (($ob['status'] ?? '') === 'fresh') {
+                    $levels[] = ['price' => ($ob['high'] + $ob['low']) / 2, 'type' => 'ob'];
+                }
+            }
+        }
+
+        // Unfilled FVG midpoints
+        if ($results['fvg'] ?? null) {
+            foreach ($results['fvg']->overlays['fvgs'] ?? [] as $fvg) {
+                if (($fvg['fill_pct'] ?? 100) < 50) {
+                    $levels[] = ['price' => ($fvg['high'] + $fvg['low']) / 2, 'type' => 'fvg'];
+                }
+            }
+        }
+
+        // OTE zone midpoints
+        if ($results['smc'] ?? null) {
+            foreach ($results['smc']->overlays['oteZones'] ?? [] as $ote) {
+                $levels[] = ['price' => ($ote['high'] + $ote['low']) / 2, 'type' => 'ote'];
+            }
+        }
+
+        // VWAP level
+        if ($results['vwap'] ?? null) {
+            $vwapData = $results['vwap']->overlays['vwap'] ?? [];
+            if (! empty($vwapData)) {
+                $lastVwap = end($vwapData);
+                $levels[] = ['price' => $lastVwap['vwap'], 'type' => 'vwap'];
+            }
+        }
+
+        return $levels;
     }
 
     private function persistResult(EngineResult $result, int $symbolId): void

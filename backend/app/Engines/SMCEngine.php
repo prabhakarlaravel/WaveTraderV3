@@ -6,6 +6,10 @@ namespace App\Engines;
 
 class SMCEngine implements EngineInterface
 {
+    private const SWING_MAP = [
+        '1M' => 3, '5M' => 4, '15M' => 5, '1H' => 8, '4H' => 12, '1D' => 20,
+    ];
+
     private int $swingStrength;
 
     public function __construct(int $swingStrength = 5)
@@ -19,7 +23,8 @@ class SMCEngine implements EngineInterface
             return new EngineResult(engine: 'smc', symbol: $symbol, timeframe: $timeframe);
         }
 
-        $swings = $this->detectSwings($candles);
+        $strength = self::SWING_MAP[$timeframe] ?? $this->swingStrength;
+        $swings = $this->detectSwings($candles, $strength);
 
         // Premium / Equilibrium / Discount zones
         $zones = $this->calculatePremiumDiscount($swings);
@@ -60,10 +65,10 @@ class SMCEngine implements EngineInterface
         );
     }
 
-    private function detectSwings(array $candles): array
+    private function detectSwings(array $candles, int $strength): array
     {
         $swings = [];
-        $n = $this->swingStrength;
+        $n = $strength;
 
         for ($i = $n; $i < count($candles) - $n; $i++) {
             $isHigh = true;
@@ -154,12 +159,23 @@ class SMCEngine implements EngineInterface
         $highs = array_values(array_filter($swings, fn ($s) => $s['type'] === 'high'));
         for ($i = 0; $i < count($highs); $i++) {
             for ($j = $i + 1; $j < count($highs); $j++) {
+                if (abs($highs[$j]['index'] - $highs[$i]['index']) < 10) {
+                    continue;
+                }
                 if (abs($highs[$i]['price'] - $highs[$j]['price']) < $tolerance) {
+                    // Check for 3+ swing cluster at same price level
+                    $clusterCount = 2;
+                    for ($k = $j + 1; $k < count($highs); $k++) {
+                        if (abs($highs[$k]['price'] - $highs[$i]['price']) < $tolerance
+                            && abs($highs[$k]['index'] - $highs[$i]['index']) >= 10) {
+                            $clusterCount++;
+                        }
+                    }
                     $pools[] = [
                         'type' => 'BSL',
                         'price' => round(max($highs[$i]['price'], $highs[$j]['price']), 2),
                         'timestamp' => $highs[$j]['timestamp'],
-                        'strength' => 2,
+                        'strength' => $clusterCount >= 3 ? 3 : 2,
                         'swept' => $this->isSwept($highs[$j]['price'], $highs[$j]['index'], $candles, 'high'),
                     ];
                     break;
@@ -171,12 +187,23 @@ class SMCEngine implements EngineInterface
         $lows = array_values(array_filter($swings, fn ($s) => $s['type'] === 'low'));
         for ($i = 0; $i < count($lows); $i++) {
             for ($j = $i + 1; $j < count($lows); $j++) {
+                if (abs($lows[$j]['index'] - $lows[$i]['index']) < 10) {
+                    continue;
+                }
                 if (abs($lows[$i]['price'] - $lows[$j]['price']) < $tolerance) {
+                    // Check for 3+ swing cluster at same price level
+                    $clusterCount = 2;
+                    for ($k = $j + 1; $k < count($lows); $k++) {
+                        if (abs($lows[$k]['price'] - $lows[$i]['price']) < $tolerance
+                            && abs($lows[$k]['index'] - $lows[$i]['index']) >= 10) {
+                            $clusterCount++;
+                        }
+                    }
                     $pools[] = [
                         'type' => 'SSL',
                         'price' => round(min($lows[$i]['price'], $lows[$j]['price']), 2),
                         'timestamp' => $lows[$j]['timestamp'],
-                        'strength' => 2,
+                        'strength' => $clusterCount >= 3 ? 3 : 2,
                         'swept' => $this->isSwept($lows[$j]['price'], $lows[$j]['index'], $candles, 'low'),
                     ];
                     break;
