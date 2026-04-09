@@ -204,18 +204,58 @@ class ConfluenceEngine
             $adjustments[] = "{$agreeingEngines} engines agree (+10%)";
         }
 
-        // -10 if in late cycle (wave 5 or C)
+        // Confidence adjustment based on wave position
         $currentWave = $ewResult->metadata['current_wave'] ?? null;
         if (in_array($currentWave, ['5', 'C'], true)) {
+            // Late cycle: trend exhaustion — reduce confidence
             $adjustedPct -= 10;
             $adjustments[] = "Late cycle wave {$currentWave} (-10%)";
+        } elseif (in_array($currentWave, ['3'], true)) {
+            // Wave 3 is the strongest impulse — boost confidence
+            $adjustedPct += 5;
+            $adjustments[] = "Strong impulse wave 3 (+5%)";
+        }
+
+        // ── Phase 5b: Wave-position direction override ──
+        // When EW engine has a clear wave label, use it to determine the
+        // correct CALL/PUT direction per Elliott Wave theory:
+        //   Uptrend impulse: 1,3,5=BULL  2,4=BEAR  A,C=BEAR  B=BULL
+        //   Downtrend impulse: inverted
+        // The EW engine's signal direction already encodes this logic, so
+        // extract it directly from the EW signals when wave health is adequate.
+        //
+        // Fallback: if metadata current_wave is null (cache staleness), derive
+        // it from waveLabels in the overlay data.
+        if (! $currentWave) {
+            $waveLabels = $ewResult->overlays['waveLabels'] ?? [];
+            if (! empty($waveLabels)) {
+                $lastLabel = end($waveLabels);
+                $currentWave = $lastLabel['label'] ?? null;
+            }
+        }
+
+        $ewDirection = null;
+        if ($currentWave && $waveHealth >= 40) {
+            $ewSignals = $ewResult->signals;
+            if (! empty($ewSignals)) {
+                // Primary signal (first one) carries the wave-position direction
+                $primaryDir = $ewSignals[0]['direction'] ?? null;
+                if ($primaryDir === 'buy') {
+                    $ewDirection = 'BULL';
+                } elseif ($primaryDir === 'sell') {
+                    $ewDirection = 'BEAR';
+                }
+            }
         }
 
         // Cap: 30% floor, 85% ceiling
         $adjustedPct = max(30, min(85, (int) round($adjustedPct)));
 
         // ── Phase 6: Call/Put + Action determination ──
-        $callPut = $this->determineCallPut($direction, $htfBias, $adjustedPct, $gatesOk, $conflict);
+        // Use wave-position direction when available and health is adequate;
+        // fall back to aggregate engine direction otherwise.
+        $callPutDirection = $ewDirection ?? $direction;
+        $callPut = $this->determineCallPut($callPutDirection, $htfBias, $adjustedPct, $gatesOk, $conflict);
         $action = $this->determineAction($total, $direction, $contextScore, $levelsScore, $triggerScore, $gatesOk, $conflict, $htfBias);
         $userReason = $this->buildUserReason($callPut, $direction, $htfBias, $adjustedPct, $gatesOk, $conflict, $agreeingEngines, $currentWave);
         $marketTrend = $this->buildMarketTrend($htfBias, $direction, $conflict);
@@ -225,7 +265,8 @@ class ConfluenceEngine
             'max_score' => $maxTotal,
             'pct' => (int) $basePct,
             'adjustedPct' => $adjustedPct,
-            'direction' => $direction,
+            'direction' => $callPutDirection,
+            'currentWave' => $currentWave,
             'callPut' => $callPut,
             'action' => $action,
             'userReason' => $userReason,
@@ -400,22 +441,33 @@ class ConfluenceEngine
         $strength = $adjustedPct >= 70 ? 'Strong' : ($adjustedPct >= 55 ? 'Moderate' : 'Early');
         $engineNote = $agreeingEngines >= 4 ? 'Multiple indicators agree.' : ($agreeingEngines >= 2 ? 'Key indicators align.' : '');
 
+        // Wave-position context for user-facing reason
+        $waveContext = match ($currentWave) {
+            '1' => 'Wave 1 — new trend starting.',
+            '2' => 'Wave 2 — pullback entry zone.',
+            '3' => 'Wave 3 — strongest impulse.',
+            '4' => 'Wave 4 — correction pullback.',
+            '5' => 'Wave 5 — late trend push.',
+            'A' => 'Wave A — correction underway.',
+            'B' => 'Wave B — counter-trend bounce.',
+            'C' => 'Wave C — final correction leg.',
+            default => '',
+        };
+
         if ($callPut === 'BUY CALL') {
             $trendNote = $htfBias === 'BULL'
                 ? 'Market trend is UP.'
                 : ($conflict ? 'Short-term bounce detected against the trend.' : 'Upward momentum building.');
-            $waveNote = in_array($currentWave, ['1', '3'], true) ? ' Strong wave phase.' : '';
 
-            return "{$strength} bullish signal. {$trendNote}{$waveNote} {$engineNote}";
+            return "{$strength} bullish signal. {$trendNote} {$waveContext} {$engineNote}";
         }
 
         if ($callPut === 'BUY PUT') {
             $trendNote = $htfBias === 'BEAR'
                 ? 'Market trend is DOWN.'
                 : ($conflict ? 'Short-term dip detected against the trend.' : 'Downward pressure building.');
-            $waveNote = in_array($currentWave, ['3', 'C'], true) ? ' Strong wave phase.' : '';
 
-            return "{$strength} bearish signal. {$trendNote}{$waveNote} {$engineNote}";
+            return "{$strength} bearish signal. {$trendNote} {$waveContext} {$engineNote}";
         }
 
         return 'Analyzing market conditions...';

@@ -925,6 +925,18 @@ class ElliottWaveEngine implements EngineInterface
 
     /**
      * Generate trade signals based on wave position.
+     *
+     * Every wave emits a directional signal so the ConfluenceEngine always
+     * has an EW vote. The direction follows Elliott Wave theory:
+     *
+     * UPTREND (bullish impulse):
+     *   1→buy, 2→sell, 3→buy, 4→sell, 5→buy, A→sell, B→buy, C→sell
+     *
+     * DOWNTREND (bearish impulse):
+     *   1→sell, 2→buy, 3→sell, 4→buy, 5→sell, A→buy, B→sell, C→buy
+     *
+     * Trend direction is derived from the impulse structure: if Wave 1's
+     * end price > start price, the impulse is bullish.
      */
     private function generateSignals(array $waves, array $fibTargets, string $timeframe): array
     {
@@ -934,46 +946,72 @@ class ElliottWaveEngine implements EngineInterface
 
         $signals = [];
         $lastWave = end($waves);
-        $prevWave = count($waves) >= 2 ? $waves[count($waves) - 2] : null;
-
-        // Signal based on current wave position
         $label = $lastWave['label'];
 
-        if (in_array($label, ['2', '4', 'B'])) {
-            // End of corrective wave = potential entry with trend
-            $direction = $lastWave['phase'] === 'CORRECTION' ? 'buy' : 'sell';
-            if ($prevWave && $prevWave['price'] > $lastWave['price']) {
-                $direction = 'buy'; // Pullback in uptrend
-            } elseif ($prevWave && $prevWave['price'] < $lastWave['price']) {
-                $direction = 'sell';
+        // Determine whether the impulse structure is bullish or bearish.
+        // Find the most recent Wave 1 and its preceding pivot (wave start).
+        $bullishImpulse = true;
+        for ($i = count($waves) - 1; $i >= 0; $i--) {
+            if ($waves[$i]['label'] === '1') {
+                // Wave 1 end price vs its start (preceding pivot)
+                if ($i > 0) {
+                    $bullishImpulse = $waves[$i]['price'] > $waves[$i - 1]['price'];
+                } else {
+                    $bullishImpulse = $waves[$i]['swing_type'] === 'high';
+                }
+                break;
             }
-
-            $signals[] = [
-                'timeframe' => $timeframe,
-                'engine' => 'elliott_wave',
-                'direction' => $direction,
-                'entry' => $lastWave['price'],
-                'sl' => null,
-                'tp' => null,
-                'confluence_score' => 75,
-                'candle_timestamp' => $lastWave['timestamp'],
-            ];
         }
 
-        if ($label === '5' || $label === 'C') {
-            // End of impulse or correction = reversal signal
-            $direction = $lastWave['swing_type'] === 'high' ? 'sell' : 'buy';
+        // Wave-position direction map: true = with-trend, false = counter-trend
+        // Impulse waves (1,3,5) move WITH the trend; corrective (2,4) move AGAINST.
+        // ABC correction: A,C move AGAINST the prior impulse; B moves WITH it.
+        $withTrend = in_array($label, ['1', '3', '5', 'B'], true);
+        $counterTrend = in_array($label, ['2', '4', 'A', 'C'], true);
 
-            $signals[] = [
-                'timeframe' => $timeframe,
-                'engine' => 'elliott_wave',
-                'direction' => $direction,
-                'entry' => $lastWave['price'],
-                'sl' => null,
-                'tp' => null,
-                'confluence_score' => 85,
-                'candle_timestamp' => $lastWave['timestamp'],
-            ];
+        if ($withTrend) {
+            $direction = $bullishImpulse ? 'buy' : 'sell';
+        } elseif ($counterTrend) {
+            $direction = $bullishImpulse ? 'sell' : 'buy';
+        } else {
+            // Unknown label — fallback to swing type
+            $direction = $lastWave['swing_type'] === 'high' ? 'sell' : 'buy';
+        }
+
+        // Confidence varies by wave position strength
+        $confidenceMap = [
+            '1' => 75, '2' => 70, '3' => 85, '4' => 70, '5' => 65,
+            'A' => 75, 'B' => 65, 'C' => 80,
+        ];
+        $confidence = $confidenceMap[$label] ?? 70;
+
+        $signals[] = [
+            'timeframe' => $timeframe,
+            'engine' => 'elliott_wave',
+            'direction' => $direction,
+            'entry' => $lastWave['price'],
+            'sl' => null,
+            'tp' => null,
+            'confluence_score' => $confidence,
+            'candle_timestamp' => $lastWave['timestamp'],
+        ];
+
+        // Additional reversal signal at end of impulse (5) or correction (C)
+        if ($label === '5' || $label === 'C') {
+            $reversalDir = $lastWave['swing_type'] === 'high' ? 'sell' : 'buy';
+            // Only add if different from the primary signal (avoids duplicate)
+            if ($reversalDir !== $direction) {
+                $signals[] = [
+                    'timeframe' => $timeframe,
+                    'engine' => 'elliott_wave',
+                    'direction' => $reversalDir,
+                    'entry' => $lastWave['price'],
+                    'sl' => null,
+                    'tp' => null,
+                    'confluence_score' => 60, // Lower confidence — it's a pending reversal
+                    'candle_timestamp' => $lastWave['timestamp'],
+                ];
+            }
         }
 
         return $signals;
