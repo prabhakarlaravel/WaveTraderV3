@@ -124,12 +124,14 @@ export const useTradeStore = defineStore('trade', () => {
    * For options trades using premiums, for others using raw prices.
    */
   function _calcPnl(trade, exitPrice, exitPremium) {
-    const mult = trade.type === 'long' ? 1 : -1
     const qty = _effectiveQty(trade)
 
+    // Options: buying a PUT or CALL is always a long position — P&L = (exit - entry) premium
     if (trade.instrument_type === 'options' && trade.premium != null && exitPremium != null) {
-      return (exitPremium - parseFloat(trade.premium)) * mult * qty
+      return (exitPremium - parseFloat(trade.premium)) * qty
     }
+    // Equity/Crypto/Forex: use type-based multiplier
+    const mult = trade.type === 'long' ? 1 : -1
     return (exitPrice - parseFloat(trade.entry_price)) * mult * qty
   }
 
@@ -333,10 +335,13 @@ export const useTradeStore = defineStore('trade', () => {
       const idx = trades.value.findIndex(t => t.id === trade.id)
       if (idx === -1) continue
 
+      // PUT options profit when price drops — invert direction for stop logic
+      const isLongDir = trade.option_type === 'PE' ? false : (trade.type === 'long')
+
       // --- Trailing stop logic ---
       if (trade.trailing_stop != null && trade.trailing_stop > 0) {
-        if (trade.type === 'long') {
-          // Track highest price for longs
+        if (isLongDir) {
+          // Track highest price for longs / CALL options
           if (currentPrice > (trade.trailing_high || trade.entry_price)) {
             trades.value[idx] = {
               ...trades.value[idx],
@@ -346,7 +351,7 @@ export const useTradeStore = defineStore('trade', () => {
             dirty = true
           }
         } else {
-          // Track lowest price for shorts (trailing_high stores trailing_low for shorts)
+          // Track lowest price for shorts / PUT options
           const trailingRef = trade.trailing_high || trade.entry_price
           if (currentPrice < trailingRef) {
             trades.value[idx] = {
@@ -363,7 +368,7 @@ export const useTradeStore = defineStore('trade', () => {
       const t = trades.value[idx]
 
       // --- SL / TP check ---
-      if (t.type === 'long') {
+      if (isLongDir) {
         if (t.sl && currentPrice <= t.sl) {
           closed.push(closeTrade(t.id, t.sl))
         } else if (t.tp && currentPrice >= t.tp) {
@@ -398,7 +403,7 @@ export const useTradeStore = defineStore('trade', () => {
 
     // Determine direction and option type from signal
     const isBuyCall = signal.callPut === 'BUY CALL'
-    const type = isBuyCall ? 'long' : 'short'
+    const type = 'long' // Buying options (CALL or PUT) is always a long position
     const optionType = isBuyCall ? 'CE' : 'PE'
 
     // Get current price from chart store (last candle close)

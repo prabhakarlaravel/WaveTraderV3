@@ -60,6 +60,20 @@ const confluence = computed(() => {
   return chartStore.overlays?.confluence || chartStore.mtfConfluence || null
 })
 
+// Time-decay adjusted confidence (matches WaveMatrixPanel logic)
+const biasConfidence = computed(() => {
+  const c = confluence.value
+  if (!c) return 0
+  let pct = c.adjustedPct ?? c.pct ?? 0
+  const computedAt = c.computed_at || chartStore.overlays?.computed_at
+  if (computedAt) {
+    const ageMs = Date.now() - new Date(computedAt).getTime()
+    if (ageMs > 300000) pct = Math.max(30, pct - 10)
+    else if (ageMs > 120000) pct = Math.max(30, pct - 5)
+  }
+  return pct
+})
+
 // Signal alert system — fires when BUY CALL / BUY PUT changes
 const { alertState, signalGlow, dismissAlert } = useSignalAlert(confluence)
 provide('signalGlow', signalGlow)
@@ -374,7 +388,7 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
               color: confluence?.callPut === 'BUY CALL' ? 'var(--bull)' :
                      confluence?.callPut === 'BUY PUT' ? 'var(--bear)' : 'var(--dim)'
             }">
-              {{ confluence?.adjustedPct || 0 }}%
+              {{ biasConfidence }}%
             </div>
           </div>
         </div>

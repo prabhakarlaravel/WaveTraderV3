@@ -30,8 +30,14 @@ class PaperTradeService
      */
     public function exit(Trade $trade, float $exitPrice): Trade
     {
-        $multiplier = $trade->type === 'long' ? 1 : -1;
-        $pnl = ($exitPrice - $trade->entry_price) * $trade->quantity * $multiplier;
+        // Options: buying CALL/PUT is always long — P&L = (exit - entry) × qty
+        // Equity/Crypto/Forex: use type-based multiplier
+        if ($trade->instrument_type === 'options' && $trade->premium !== null) {
+            $pnl = ($exitPrice - $trade->premium) * $trade->quantity;
+        } else {
+            $multiplier = $trade->type === 'long' ? 1 : -1;
+            $pnl = ($exitPrice - $trade->entry_price) * $trade->quantity * $multiplier;
+        }
 
         $trade->update([
             'exit_price' => $exitPrice,
@@ -60,7 +66,10 @@ class PaperTradeService
 
     private function isStopHit(Trade $trade, float $price, string $level): bool
     {
-        if ($trade->type === 'long') {
+        // PUT options profit when price drops — SL is above entry, TP is below
+        $isLongDirection = $trade->option_type === 'PE' ? false : ($trade->type === 'long');
+
+        if ($isLongDirection) {
             return $level === 'sl' ? $price <= $trade->sl : $price >= $trade->tp;
         }
 

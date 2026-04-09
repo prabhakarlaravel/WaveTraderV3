@@ -737,41 +737,123 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
 
   // ── Extract the latest impulse wave anchors from waveLabels ──
   // Scans backwards through waveLabels to find the most recent 1→2→3→4→5 sequence
+  /**
+   * Extract the CURRENT wave's Fib anchors from waveLabels.
+   * Uses the last two confirmed waves to define the retracement range,
+   * and the preceding impulse wave's length for extension projection.
+   *
+   * For each wave we show:
+   *   Wave 2: retrace of W1 (C→1 range)     + W3 extension targets
+   *   Wave 3: retrace of W1 (C→1 range)     + W3 extension targets
+   *   Wave 4: retrace of W3 (2→3 range)     + W5 extension targets
+   *   Wave 5: retrace of W3 (2→3 range)     + W5 extension targets
+   *   Wave A: retrace of full impulse (0→5)  + correction targets
+   *   Wave B: retrace of A (5→A range)       + C extension targets
+   *   Wave C: retrace of A (5→A range)       + C extension targets
+   */
   function extractWaveAnchors(waveLabels) {
     if (!waveLabels || waveLabels.length < 3) return null
 
-    // Walk backwards to find the last Wave 1
-    let w1 = null, w2 = null, w3 = null, w4 = null, w5 = null
-    // Also track the start of Wave 1 (= previous C or start of impulse)
-    let w1Start = null
-
+    // Build a map of the last occurrence of each wave label
+    const lastIdx = {}
     for (let i = waveLabels.length - 1; i >= 0; i--) {
-      const wl = waveLabels[i]
-      const label = String(wl.label)
-
-      if (label === '3' && !w3) {
-        w3 = { price: wl.price, time: wl.time, type: wl.type }
-      } else if (label === '2' && !w2 && w3) {
-        w2 = { price: wl.price, time: wl.time, type: wl.type }
-      } else if (label === '1' && !w1 && w2) {
-        w1 = { price: wl.price, time: wl.time, type: wl.type }
-        // Wave 1 start = the label just before Wave 1 (typically C or start)
-        if (i > 0) {
-          w1Start = { price: waveLabels[i - 1].price, time: waveLabels[i - 1].time, type: waveLabels[i - 1].type }
-        }
-        break
-      } else if (label === '5' && !w5 && !w3) {
-        w5 = { price: wl.price, time: wl.time, type: wl.type }
-      } else if (label === '4' && !w4 && w5 && !w3) {
-        w4 = { price: wl.price, time: wl.time, type: wl.type }
-      } else if (label === '3' && !w3 && w4) {
-        w3 = { price: wl.price, time: wl.time, type: wl.type }
+      const label = String(waveLabels[i].label)
+      if (!(label in lastIdx)) {
+        lastIdx[label] = i
       }
     }
 
-    if (!w1 || !w2 || !w1Start) return null
+    const waveAt = (label) => {
+      const idx = lastIdx[label]
+      if (idx === undefined) return null
+      const wl = waveLabels[idx]
+      return { price: wl.price, time: wl.time, type: wl.type, label }
+    }
 
-    return { w1Start, w1, w2, w3, w4, w5 }
+    // Current wave = last label in the array
+    const currentLabel = String(waveLabels[waveLabels.length - 1].label)
+
+    // Determine impulse direction from Wave 1
+    let bullish = true
+    const w1Idx = lastIdx['1']
+    if (w1Idx !== undefined && w1Idx > 0) {
+      bullish = waveLabels[w1Idx].price > waveLabels[w1Idx - 1].price
+    }
+
+    // Define retracement swing (from→to) and extension base depending on current wave
+    let swingFrom = null  // Retracement 0% (impulse end)
+    let swingTo = null    // Retracement 100% (impulse start)
+    let extBase = null    // Extension projects from this price
+    let extLength = null  // Length to project (in price units)
+    let retLabel = ''     // Label prefix for retracement
+    let extLabel = ''     // Label prefix for extension
+    let actual = null     // Actual wave endpoint to show marker
+
+    if (['2', '3'].includes(currentLabel)) {
+      // Retrace: Wave 1 (from C→1)
+      const w1 = waveAt('1')
+      const w1StartIdx = lastIdx['1'] > 0 ? lastIdx['1'] - 1 : null
+      const w1Start = w1StartIdx !== null ? { price: waveLabels[w1StartIdx].price } : null
+      if (!w1 || !w1Start) return null
+      swingFrom = w1    // 0%
+      swingTo = w1Start // 100%
+      retLabel = 'W1→2'
+      // Extension: W1 length from W2 end
+      const w2 = waveAt('2')
+      extBase = w2
+      extLength = Math.abs(w1.price - w1Start.price)
+      extLabel = 'W3 Ext'
+      actual = currentLabel === '3' ? waveAt('3') : waveAt('2')
+    } else if (['4', '5'].includes(currentLabel)) {
+      // Retrace: Wave 3 (from 2→3)
+      const w2 = waveAt('2')
+      const w3 = waveAt('3')
+      if (!w2 || !w3) return null
+      swingFrom = w3    // 0%
+      swingTo = w2      // 100%
+      retLabel = 'W3→4'
+      // Extension: W3 length from W4 end
+      const w4 = waveAt('4')
+      extBase = w4
+      extLength = Math.abs(w3.price - w2.price)
+      extLabel = 'W5 Ext'
+      actual = currentLabel === '5' ? waveAt('5') : waveAt('4')
+    } else if (['A', 'B', 'C'].includes(currentLabel)) {
+      // Retrace: full impulse (start→5) for wave A, or A swing for B/C
+      const w5 = waveAt('5')
+      const wA = waveAt('A')
+      if (currentLabel === 'A' && w5) {
+        // Retrace of full impulse
+        const w1Idx2 = lastIdx['1']
+        const impStart = w1Idx2 !== undefined && w1Idx2 > 0 ? { price: waveLabels[w1Idx2 - 1].price } : null
+        if (!impStart) return null
+        swingFrom = w5
+        swingTo = impStart
+        retLabel = 'Imp→A'
+        extBase = wA || w5
+        extLength = Math.abs(w5.price - impStart.price)
+        extLabel = 'A Ext'
+        actual = wA
+      } else if (['B', 'C'].includes(currentLabel) && w5 && wA) {
+        // Retrace of Wave A (5→A)
+        swingFrom = wA
+        swingTo = w5
+        retLabel = 'A→B'
+        const wB = waveAt('B')
+        extBase = wB || wA
+        extLength = Math.abs(wA.price - w5.price)
+        extLabel = 'C Ext'
+        actual = currentLabel === 'C' ? waveAt('C') : waveAt('B')
+      } else {
+        return null
+      }
+    } else {
+      return null
+    }
+
+    if (!swingFrom || !swingTo) return null
+
+    return { swingFrom, swingTo, extBase, extLength, retLabel, extLabel, actual, bullish, currentLabel }
   }
 
   // ── Main Fib renderer: wave-mapped retracement + extension ──
@@ -785,40 +867,36 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
     const nextTargets = overlays.nextTargets || {}
     const invalidation = nextTargets.invalidation
 
-    // Extract wave anchor points
+    // Extract wave anchor points for CURRENT wave position
     const anchors = extractWaveAnchors(waveLabels)
     if (!anchors) return
 
-    const { w1Start, w1, w2, w3 } = anchors
+    const { swingFrom, swingTo, extBase, extLength, retLabel, extLabel, actual, bullish } = anchors
 
-    // Determine wave direction: bullish (1 is high, w1Start is low) or bearish
-    const bullish = w1.price > w1Start.price
+    // Swing range (always positive)
+    const swingRange = Math.abs(swingFrom.price - swingTo.price)
+    if (swingRange <= 0) return
 
-    // Wave 1 range (always positive)
-    const w1High = bullish ? w1.price : w1Start.price
-    const w1Low = bullish ? w1Start.price : w1.price
-    const w1Range = w1High - w1Low
+    // Direction of swing: swingFrom is the impulse end (0%), swingTo is the start (100%)
+    const swingUp = swingFrom.price > swingTo.price // true if 0% is high (retrace goes down)
 
-    if (w1Range <= 0) return
-
-    // ── FIB SET 1: Wave 1→2 Retracement ──
+    // ── FIB SET 1: Retracement levels ──
     if (toggles.fibRetrace) {
       const retraceLevels = [
-        { level: 0,     label: 'W1→2  0%',    lineWidth: 1, lineStyle: 0 },
-        { level: 0.236, label: 'W1→2  23.6%', lineWidth: 1, lineStyle: 2 },
-        { level: 0.382, label: 'W1→2  38.2%', lineWidth: 1, lineStyle: 2 },
-        { level: 0.5,   label: 'W1→2  50%',   lineWidth: 1, lineStyle: 2 },
-        { level: 0.618, label: 'W1→2  61.8%', lineWidth: 2, lineStyle: 2, bright: true },
-        { level: 0.786, label: 'W1→2  78.6%', lineWidth: 1, lineStyle: 2 },
-        { level: 1.0,   label: 'W1→2  100%',  lineWidth: 1, lineStyle: 0 },
+        { level: 0,     label: `${retLabel}  0%`,    lineWidth: 1, lineStyle: 0 },
+        { level: 0.236, label: `${retLabel}  23.6%`, lineWidth: 1, lineStyle: 2 },
+        { level: 0.382, label: `${retLabel}  38.2%`, lineWidth: 1, lineStyle: 2 },
+        { level: 0.5,   label: `${retLabel}  50%`,   lineWidth: 1, lineStyle: 2 },
+        { level: 0.618, label: `${retLabel}  61.8%`, lineWidth: 2, lineStyle: 2, bright: true },
+        { level: 0.786, label: `${retLabel}  78.6%`, lineWidth: 1, lineStyle: 2 },
+        { level: 1.0,   label: `${retLabel}  100%`,  lineWidth: 1, lineStyle: 0 },
       ]
 
-      // Calculate prices: 0% = Wave 1 end, 100% = Wave 1 start
-      // For bullish: 0% is the high (w1.price), retracement goes down
+      // Calculate prices: 0% = swingFrom (impulse end), 100% = swingTo (impulse start)
       for (const fl of retraceLevels) {
-        fl.price = bullish
-          ? w1.price - fl.level * w1Range   // retrace down from Wave 1 high
-          : w1.price + fl.level * w1Range   // retrace up from Wave 1 low (bearish)
+        fl.price = swingUp
+          ? swingFrom.price - fl.level * swingRange   // retrace down
+          : swingFrom.price + fl.level * swingRange   // retrace up
       }
 
       // Create native price lines for retracement
@@ -839,42 +917,39 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
         } catch { /* chart not ready */ }
       }
 
-      // Wave 2 actual level marker
-      if (w2) {
-        const w2Retrace = bullish
-          ? (w1.price - w2.price) / w1Range
-          : (w2.price - w1.price) / w1Range
-        const w2Pct = (w2Retrace * 100).toFixed(1)
-        const w2Y = getY(w2.price)
-        if (w2Y !== null && w2Y > 0 && w2Y < 2000) {
-          // Actual W2 marker line
+      // Actual retracement marker (where the corrective wave actually landed)
+      if (actual) {
+        const actualRetrace = swingUp
+          ? (swingFrom.price - actual.price) / swingRange
+          : (actual.price - swingFrom.price) / swingRange
+        const actualPct = (actualRetrace * 100).toFixed(1)
+        const actualY = getY(actual.price)
+        if (actualY !== null && actualY > 0 && actualY < 2000) {
           const markerLine = document.createElementNS('http://www.w3.org/2000/svg', 'line')
           markerLine.setAttribute('x1', Math.max(0, chartWidth - 250))
-          markerLine.setAttribute('y1', w2Y)
+          markerLine.setAttribute('y1', actualY)
           markerLine.setAttribute('x2', chartWidth - 70)
-          markerLine.setAttribute('y2', w2Y)
+          markerLine.setAttribute('y2', actualY)
           markerLine.setAttribute('stroke', '#ef5350')
           markerLine.setAttribute('stroke-width', '1.5')
           markerLine.setAttribute('stroke-dasharray', '3 2')
           markerLine.setAttribute('opacity', '0.7')
           svg.appendChild(markerLine)
 
-          // Label: "W2: 82.8%"
           const markerLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text')
           markerLabel.setAttribute('x', chartWidth - 245)
-          markerLabel.setAttribute('y', w2Y - 4)
+          markerLabel.setAttribute('y', actualY - 4)
           markerLabel.setAttribute('fill', '#ef5350')
           markerLabel.setAttribute('font-size', '8')
           markerLabel.setAttribute('font-weight', '700')
           markerLabel.setAttribute('font-family', 'monospace')
-          markerLabel.textContent = `W2: ${w2Pct}%`
+          markerLabel.textContent = `${actual.label || 'Actual'}: ${actualPct}%`
           svg.appendChild(markerLabel)
 
-          // Warning if deep retracement > 78.6%
-          if (w2Retrace > 0.786) {
+          if (actualRetrace > 0.786) {
             const warnText = document.createElementNS('http://www.w3.org/2000/svg', 'text')
             warnText.setAttribute('x', chartWidth - 245)
-            warnText.setAttribute('y', w2Y + 10)
+            warnText.setAttribute('y', actualY + 10)
             warnText.setAttribute('fill', '#ef5350')
             warnText.setAttribute('font-size', '7')
             warnText.setAttribute('opacity', '0.6')
@@ -959,21 +1034,21 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
       }
     }
 
-    // ── FIB SET 2: Wave 3 Extensions (Wave 1 length projected from Wave 2 end) ──
-    if (toggles.fibExt && w3) {
+    // ── FIB SET 2: Extensions (project preceding wave length from corrective end) ──
+    if (toggles.fibExt && extBase && extLength > 0) {
       const extLevels = [
-        { level: 0.618, label: 'Ext 0.618', lineWidth: 1, lineStyle: 3 },
-        { level: 1.0,   label: 'Ext 1.000', lineWidth: 1, lineStyle: 3 },
-        { level: 1.272, label: 'Ext 1.272', lineWidth: 1, lineStyle: 3 },
-        { level: 1.618, label: 'Ext 1.618', lineWidth: 1, lineStyle: 3, bright: true },
-        { level: 2.618, label: 'Ext 2.618', lineWidth: 1, lineStyle: 3 },
+        { level: 0.618, label: `${extLabel} 0.618`, lineWidth: 1, lineStyle: 3 },
+        { level: 1.0,   label: `${extLabel} 1.000`, lineWidth: 1, lineStyle: 3 },
+        { level: 1.272, label: `${extLabel} 1.272`, lineWidth: 1, lineStyle: 3 },
+        { level: 1.618, label: `${extLabel} 1.618`, lineWidth: 1, lineStyle: 3, bright: true },
+        { level: 2.618, label: `${extLabel} 2.618`, lineWidth: 1, lineStyle: 3 },
       ]
 
-      // Calculate extension prices: project W1 length from W2 end
+      // Calculate extension prices: project from extBase
       for (const el of extLevels) {
         el.price = bullish
-          ? w2.price + el.level * w1Range   // extend up from W2 low
-          : w2.price - el.level * w1Range   // extend down from W2 high (bearish)
+          ? extBase.price + el.level * extLength   // extend up
+          : extBase.price - el.level * extLength   // extend down (bearish)
       }
 
       // Create native price lines for extensions
@@ -985,47 +1060,13 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
             price: el.price,
             color: color,
             lineWidth: el.lineWidth,
-            lineStyle: el.lineStyle, // 3=dotted
+            lineStyle: el.lineStyle,
             axisLabelVisible: true,
             title: el.label,
             lineVisible: true,
           })
           fibPriceLines.push(pl)
         } catch { /* ignore */ }
-      }
-
-      // Wave 3 actual extension marker
-      const w3Ext = bullish
-        ? (w3.price - w2.price) / w1Range
-        : (w2.price - w3.price) / w1Range
-      const w3ExtStr = w3Ext.toFixed(3)
-      const w3Y = getY(w3.price)
-      if (w3Y !== null && w3Y > 0 && w3Y < 2000) {
-        const badgeW = 90
-        const badgeH = 16
-        const badgeX = chartWidth - 70 - badgeW - 10
-        const badgeY = w3Y - badgeH / 2
-
-        const badge = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-        badge.setAttribute('x', badgeX)
-        badge.setAttribute('y', badgeY)
-        badge.setAttribute('width', badgeW)
-        badge.setAttribute('height', badgeH)
-        badge.setAttribute('rx', '3')
-        badge.setAttribute('fill', 'rgba(34,197,94,0.12)')
-        badge.setAttribute('stroke', 'rgba(34,197,94,0.4)')
-        badge.setAttribute('stroke-width', '0.5')
-        svg.appendChild(badge)
-
-        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-        text.setAttribute('x', badgeX + 8)
-        text.setAttribute('y', w3Y + 4)
-        text.setAttribute('fill', '#22c55e')
-        text.setAttribute('font-size', '8')
-        text.setAttribute('font-weight', '700')
-        text.setAttribute('font-family', 'monospace')
-        text.textContent = `W3: ${w3ExtStr}x`
-        svg.appendChild(text)
       }
 
       // Extension target zone badges (pulsing)
