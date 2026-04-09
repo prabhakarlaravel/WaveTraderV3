@@ -806,16 +806,19 @@ export function useChartOverlays(chartRef, candleSeriesRef, chartStore, overlayT
       actual = currentLabel === '3' ? waveAt('3') : waveAt('2')
     } else if (['4', '5'].includes(currentLabel)) {
       // Retrace: Wave 3 (from 2→3)
+      const w1 = waveAt('1')
       const w2 = waveAt('2')
       const w3 = waveAt('3')
       if (!w2 || !w3) return null
       swingFrom = w3    // 0%
       swingTo = w2      // 100%
       retLabel = 'W3→4'
-      // Extension: W3 length from W4 end
+      // Extension: W5 = W1 length projected from W4 end (classic Elliott rule)
       const w4 = waveAt('4')
+      const w1StartIdx = lastIdx['1'] > 0 ? lastIdx['1'] - 1 : null
+      const w1Start = w1StartIdx !== null ? { price: waveLabels[w1StartIdx].price } : null
       extBase = w4
-      extLength = Math.abs(w3.price - w2.price)
+      extLength = (w1 && w1Start) ? Math.abs(w1.price - w1Start.price) : Math.abs(w3.price - w2.price)
       extLabel = 'W5 Ext'
       actual = currentLabel === '5' ? waveAt('5') : waveAt('4')
     } else if (['A', 'B', 'C'].includes(currentLabel)) {
