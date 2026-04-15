@@ -50,6 +50,27 @@ class NSEGapDetector implements GapDetectorInterface
         '1H' => 60, '4H' => 240, '1D' => 1440,
     ];
 
+    /**
+     * NSE trading holidays (IST dates). Market is closed — these days must not
+     * be flagged as gaps. Keep this list in sync each calendar year from
+     * https://www.nseindia.com/resources/exchange-communication-holidays
+     */
+    private const NSE_HOLIDAYS = [
+        // 2025
+        '2025-01-26', '2025-02-26', '2025-03-14', '2025-03-31', '2025-04-10',
+        '2025-04-14', '2025-04-18', '2025-05-01', '2025-08-15', '2025-08-27',
+        '2025-10-02', '2025-10-21', '2025-10-22', '2025-11-05', '2025-12-25',
+        // 2026
+        '2026-01-15', '2026-01-26', '2026-02-19', '2026-03-03', '2026-03-26',
+        '2026-03-31', '2026-04-03', '2026-04-14', '2026-05-01', '2026-08-15',
+        '2026-08-26', '2026-10-02', '2026-10-21', '2026-11-09', '2026-12-25',
+    ];
+
+    private function isNseHoliday(Carbon $dayIST): bool
+    {
+        return in_array($dayIST->format('Y-m-d'), self::NSE_HOLIDAYS, true);
+    }
+
     public function getMarketType(): string
     {
         return 'NSE Session';
@@ -163,6 +184,22 @@ class NSEGapDetector implements GapDetectorInterface
             // Skip weekends
             if ($dayIST->isWeekend()) {
                 continue;
+            }
+
+            // Skip NSE trading holidays — market closed, no data expected
+            if ($this->isNseHoliday($dayIST)) {
+                continue;
+            }
+
+            // Skip the current trading day if the session is still in progress.
+            // Expected-candle counts assume the full 09:15–15:30 IST window, so
+            // mid-session days would always look "incomplete" and get flagged
+            // as gaps even though data is streaming in normally.
+            if ($dayIST->isSameDay($now)) {
+                $marketClose = $now->copy()->setTime(self::MARKET_CLOSE_HOUR, self::MARKET_CLOSE_MINUTE);
+                if ($now->lt($marketClose)) {
+                    continue;
+                }
             }
 
             // Skip future (today after market close is still valid)

@@ -17,14 +17,103 @@ class ElliottWaveEngine implements EngineInterface
 
     private const FIB_LEVELS = [0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.618, 2.618];
 
+    /**
+     * FIX C — Adaptive pivot strength per timeframe.
+     * Hardcoded strength=8 produced 780 swings on a 5175-candle 5M window, which
+     * let the labeler stitch together waves spanning 28 days across massive gaps.
+     * A stronger pivot produces fewer, more meaningful swings anchored to real
+     * structural highs/lows, so wave counts stay contiguous and recent.
+     */
+    private const PIVOT_STRENGTH_MAP = [
+        '1M'  => 8,
+        '5M'  => 10,
+        '15M' => 10,
+        '1H'  => 10,   // was 16 → 12 → 10. 492 candles can support 10.
+        '4H'  => 8,    // was 10 → 14 → 8. Only ~212 candles; 14 was too aggressive.
+        '1D'  => 4,    // low — daily bootstrap is only ~60-90 candles (3 months)
+    ];
+
+    /**
+     * Minimum wave move size as a fraction of ATR.
+     * A wave must move at least MIN_WAVE_ATR_RATIO × ATR(20) to qualify.
+     * Without this, the labeler accepts 247-point micro-swings as W1/W2
+     * on a 5M chart where the 20-bar ATR is ~300 pts — then labels a
+     * 3,500-point multi-day move as W3, producing a grotesquely
+     * disproportionate impulse.
+     */
+    private const MIN_WAVE_ATR_RATIO = 0.5;
+    private const ATR_PERIOD = 20;
+
+    /**
+     * Per-timeframe ATR ratio overrides. Higher TFs (especially 1D) have
+     * fewer candles and larger ATR values, so use a lower ratio to avoid
+     * filtering out legitimate wave legs. Without this, a 1D ATR of ~800 pts
+     * with 0.5 ratio = 400 pt minimum, which may reject valid W2/W4
+     * retracements on 60-candle datasets.
+     */
+    private const ATR_RATIO_OVERRIDES = [
+        '1D' => 0.25,
+        '4H' => 0.35,
+    ];
+
+    /**
+     * FIX B — Maximum bars allowed between two consecutive labeled waves.
+     * Prevents the labeler from stitching a wave-3 in January onto a wave-4 in
+     * March (28-day gap on 5M) just because the price relationships happen to
+     * validate. A wave count must be *contiguous in time* to be actionable.
+     */
+    private const MAX_BARS_BETWEEN_WAVES = [
+        '1M'  => 180,   // ~3 hours
+        '5M'  => 150,   // ~2 NSE sessions (75 bars/day)
+        '15M' => 120,   // ~2.5 sessions
+        '1H'  => 80,    // ~3 NSE sessions
+        '4H'  => 50,
+        '1D'  => 40,
+    ];
+
+    /**
+     * Maximum CALENDAR HOURS allowed between two consecutive labeled waves.
+     * Prevents stitching waves across multi-day gaps (holidays, weekends + holidays)
+     * where bar indices are close (due to missing candles) but actual calendar time
+     * is far apart. A gap-up open after a 5-day gap is a structural event, not a
+     * continuation of the prior session's impulse.
+     *
+     * Set generously to allow normal weekends (~42h) but break at multi-day gaps.
+     */
+    private const MAX_HOURS_BETWEEN_WAVES = [
+        '1M'  => 144,   // 6 days — covers weekends + 1 holiday (e.g. Fri→Tue)
+        '5M'  => 144,   // 6 days — same; W4 directional fix prevents invalid stitching
+        '15M' => 168,   // 7 days — one full week
+        '1H'  => 336,   // 2 weeks
+        '4H'  => 720,   // 30 days
+        '1D'  => 2160,  // 90 days (daily has natural session gaps)
+    ];
+
+    /**
+     * FIX B — How many recent candles to inspect when deciding the impulse
+     * direction from a price slope (instead of trusting the first two swings
+     * at an arbitrary offset).
+     */
+    private const DIRECTION_LOOKBACK_BARS = [
+        '1M'  => 240,
+        '5M'  => 150,
+        '15M' => 100,
+        '1H'  => 80,
+        '4H'  => 60,
+        '1D'  => 40,
+    ];
+
     public function run(array $candles, string $symbol, string $timeframe): EngineResult
     {
         if (count($candles) < 50) {
             return new EngineResult(engine: 'elliott_wave', symbol: $symbol, timeframe: $timeframe);
         }
 
-        // Step 1: Detect pivots at multiple strengths
-        $pivots = $this->detectPivots($candles, 8);
+        // Step 1: Detect pivots using adaptive strength per timeframe (Fix C).
+        // Weaker pivots create noise that the labeler stitches into non-contiguous
+        // chains spanning weeks. Stronger pivots yield fewer, more meaningful swings.
+        $pivotStrength = self::PIVOT_STRENGTH_MAP[$timeframe] ?? 12;
+        $pivots = $this->detectPivots($candles, $pivotStrength);
 
         // Step 2: Build alternating swing sequence
         $swings = $this->buildSwingSequence($pivots);
@@ -33,11 +122,33 @@ class ElliottWaveEngine implements EngineInterface
             return new EngineResult(engine: 'elliott_wave', symbol: $symbol, timeframe: $timeframe);
         }
 
-        // Step 3: Label waves (impulse + correction)
-        $waveCounts = $this->labelWaves($swings, $candles);
+        // Step 2b: Calculate ATR for minimum wave size filter.
+        $atr = $this->calculateATR($candles, self::ATR_PERIOD);
+
+        // Step 3: Label waves (impulse + correction) — timeframe-aware
+        $waveCounts = $this->labelWaves($swings, $candles, $timeframe, $atr);
 
         // Step 4: Validate rules and calculate health
         $validation = $this->validateRules($waveCounts);
+
+        // Step 4b: Derive wave_state from validation result.
+        //   confirmed            → score ≥ 60 AND no critical violations
+        //   awaiting_confirmation → score 40-59 AND no critical violations
+        //   invalidated          → any critical violation OR score < 40
+        $hasCritical = false;
+        foreach ($validation['violations'] as $v) {
+            if (($v['severity'] ?? '') === 'critical') {
+                $hasCritical = true;
+                break;
+            }
+        }
+        if ($hasCritical || $validation['score'] < 40) {
+            $waveState = 'invalidated';
+        } elseif ($validation['score'] < 60) {
+            $waveState = 'awaiting_confirmation';
+        } else {
+            $waveState = 'confirmed';
+        }
 
         // Step 5: Calculate Fibonacci targets
         $fibTargets = $this->calculateFibTargets($waveCounts);
@@ -93,9 +204,17 @@ class ElliottWaveEngine implements EngineInterface
                 'degree' => $degree,
                 'health_score' => $validation['score'],
                 'violations' => $validation['violations'],
+                'wave_state' => $waveState,
                 'wave_count' => count($waveCounts),
-                'current_wave' => ! empty($waveCounts) ? end($waveCounts)['label'] : null,
-                'phase' => ! empty($waveCounts) ? end($waveCounts)['phase'] : null,
+                // Invalidated counts must not leak a current_wave label to the
+                // ConfluenceEngine — otherwise downstream logic (e.g. "Wave 2 =
+                // pullback entry") will fire on a broken chain.
+                'current_wave' => ($waveState !== 'invalidated' && ! empty($waveCounts))
+                    ? end($waveCounts)['label']
+                    : null,
+                'phase' => ($waveState !== 'invalidated' && ! empty($waveCounts))
+                    ? end($waveCounts)['phase']
+                    : null,
             ],
         );
     }
@@ -278,21 +397,66 @@ class ElliottWaveEngine implements EngineInterface
      * Pre-validates each wave against Elliott rules and Fibonacci constraints
      * BEFORE accepting the label. Invalid sequences are rejected.
      */
-    private function labelWaves(array $swings, array $candles): array
+    private function labelWaves(array $swings, array $candles, string $timeframe = '5M', float $atr = 0): array
     {
         if (count($swings) < 5) {
             return [];
         }
 
-        // Try labeling from multiple starting points to find the best valid count
-        $bestWaves = [];
-        $bestScore = -1;
+        $bullish = $this->determineBullishFromPriceSlope($candles, $timeframe);
+        $maxGap = self::MAX_BARS_BETWEEN_WAVES[$timeframe] ?? 120;
+        $atrRatio = self::ATR_RATIO_OVERRIDES[$timeframe] ?? self::MIN_WAVE_ATR_RATIO;
+        $minMove = $atr * $atrRatio;
 
-        $maxStart = min(count($swings) - 5, 6); // Try up to 6 starting offsets
-        for ($startOffset = 0; $startOffset <= $maxStart; $startOffset++) {
-            $candidate = $this->tryLabelFromOffset($swings, $startOffset);
-            if (count($candidate) > count($bestWaves)) {
+        $bestWaves = [];
+        $bestScore = -INF;
+
+        $swingCount = count($swings);
+        $maxStart = max(0, $swingCount - 5);
+        for ($startOffset = $maxStart; $startOffset >= 0; $startOffset--) {
+            $candidate = $this->tryLabelFromOffset($swings, $startOffset, $bullish, $maxGap, $minMove, $candles, $timeframe);
+            if (count($candidate) < 3) {
+                continue;
+            }
+
+            $score = $this->scoreWaveChain($candidate, $swings, $timeframe);
+            if ($score > $bestScore) {
+                $bestScore = $score;
                 $bestWaves = $candidate;
+            }
+        }
+
+        // ALWAYS try opposite direction too and compare scores.
+        // The slope-based direction is a hint, not gospel — a recent bearish
+        // impulse can have a slightly positive overall slope due to the recovery
+        // bounce, causing the primary pass to find only stale bullish labels.
+        // Running both directions ensures the best (most recent, most complete)
+        // count wins regardless of the slope heuristic.
+        for ($startOffset = $maxStart; $startOffset >= 0; $startOffset--) {
+            $candidate = $this->tryLabelFromOffset($swings, $startOffset, ! $bullish, $maxGap, $minMove, $candles, $timeframe);
+            if (count($candidate) < 3) {
+                continue;
+            }
+            $score = $this->scoreWaveChain($candidate, $swings, $timeframe);
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $bestWaves = $candidate;
+            }
+        }
+
+        // FIX 4 — Stale wave rejection.
+        // If the best chain's last wave is too far from the current candle
+        // (end of the dataset), the count is stale and no longer actionable.
+        // E.g. a February wave count persisting into April because no new
+        // swings matched — better to show nothing than a stale count.
+        if (! empty($bestWaves) && ! empty($candles)) {
+            $lastWaveIdx = (int) end($bestWaves)['index'];
+            $totalCandles = count($candles);
+            // Allow up to 2× the max-gap tolerance before declaring stale.
+            // Beyond that, the count is too old to be useful.
+            $stalenessLimit = ($maxGap * 2);
+            if (($totalCandles - 1 - $lastWaveIdx) > $stalenessLimit) {
+                $bestWaves = [];
             }
         }
 
@@ -300,18 +464,130 @@ class ElliottWaveEngine implements EngineInterface
     }
 
     /**
-     * Attempt to label waves starting from a given offset in the swing array.
-     * Validates Elliott rules progressively — rejects invalid labels inline.
+     * FIX B — Decide impulse direction from the slope of recent close prices
+     * rather than from the first two swings of an arbitrary offset. Uses a
+     * simple least-squares linear regression over the lookback window.
      */
-    private function tryLabelFromOffset(array $swings, int $startOffset): array
+    private function determineBullishFromPriceSlope(array $candles, string $timeframe): bool
+    {
+        $lookback = self::DIRECTION_LOOKBACK_BARS[$timeframe] ?? 100;
+        $n = count($candles);
+        $start = max(0, $n - $lookback);
+        $slice = array_slice($candles, $start);
+        $m = count($slice);
+        if ($m < 3) {
+            return true;
+        }
+
+        // Least-squares slope of close vs index.
+        $sumX = 0.0; $sumY = 0.0; $sumXY = 0.0; $sumX2 = 0.0;
+        foreach ($slice as $i => $c) {
+            $x = (float) $i;
+            $y = (float) $c['close'];
+            $sumX += $x; $sumY += $y; $sumXY += $x * $y; $sumX2 += $x * $x;
+        }
+        $denom = ($m * $sumX2 - $sumX * $sumX);
+        if ($denom == 0.0) {
+            return true;
+        }
+        $slope = ($m * $sumXY - $sumX * $sumY) / $denom;
+
+        return $slope >= 0;
+    }
+
+    /**
+     * Calculate the Average True Range over the last $period candles.
+     * Used as a minimum wave-size threshold so micro-swings can't be
+     * labeled as Elliott Waves.
+     */
+    private function calculateATR(array $candles, int $period = 20): float
+    {
+        $n = count($candles);
+        if ($n < $period + 1) {
+            // Fallback: simple average range
+            $sum = 0.0;
+            foreach (array_slice($candles, -$period) as $c) {
+                $sum += (float) $c['high'] - (float) $c['low'];
+            }
+            return $sum / max(1, min($period, $n));
+        }
+
+        $trSum = 0.0;
+        $start = max(1, $n - $period);
+        for ($i = $start; $i < $n; $i++) {
+            $h = (float) $candles[$i]['high'];
+            $l = (float) $candles[$i]['low'];
+            $pc = (float) $candles[$i - 1]['close'];
+            $tr = max($h - $l, abs($h - $pc), abs($l - $pc));
+            $trSum += $tr;
+        }
+        return $trSum / ($n - $start);
+    }
+
+    /**
+     * FIX B — Score a labeled wave chain so we can pick the best count.
+     * Rewards:
+     *   - Longer valid chains (more labels placed = more rule checks passed)
+     *   - Chains anchored to RECENT swings (higher endIndex relative to total)
+     *   - Chains spanning fewer bars (tighter = more coherent)
+     *   - Chains that consumed few non-accepted swings (skip_count penalty)
+     */
+    /**
+     * Score a labeled wave chain so we can pick the best count.
+     *
+     * The scoring HEAVILY rewards recency so that a 5-wave chain anchored in
+     * the last few sessions always beats an 8-wave chain from 3 weeks ago.
+     * Without this, the old March chain (8 labels, high chainLen score) would
+     * always outrank a fresh April chain (5 labels) even though the old one
+     * is completely off-screen and useless for trading.
+     */
+    private function scoreWaveChain(array $chain, array $allSwings, string $timeframe): float
+    {
+        if (empty($chain)) {
+            return -INF;
+        }
+        $lastSwingIdx = (int) end($allSwings)['index'];
+        $firstWaveIdx = (int) $chain[0]['index'];
+        $lastWaveIdx = (int) end($chain)['index'];
+
+        $chainLen  = count($chain);
+        $span      = max(1, $lastWaveIdx - $firstWaveIdx);
+
+        // Distance from the very latest swing index — smaller is better.
+        // This is the KEY factor: a chain ending 1000 bars back should never
+        // beat a chain ending 50 bars back, regardless of chain length.
+        $recencyGap = max(0, $lastSwingIdx - $lastWaveIdx);
+
+        // Penalty grows when the span is too big relative to max-gap expectation.
+        $maxGap = self::MAX_BARS_BETWEEN_WAVES[$timeframe] ?? 120;
+        $spanPenalty = $span / max(1.0, $maxGap * $chainLen);
+
+        // Recency is weighted 10× per bar of gap. A chain 200 bars stale
+        // loses 2000 points — more than a full 8-wave chain can earn (800).
+        // This guarantees any valid recent chain beats any old chain.
+        return ($chainLen * 100.0)
+            - ($recencyGap * 10.0)
+            - ($spanPenalty * 50.0);
+    }
+
+    /**
+     * Attempt to label waves starting from a given offset in the swing array.
+     * FIX B — Now accepts an explicit $bullish direction + $maxGap constraint:
+     *   1. Direction no longer derived from the first two swings (could be stale).
+     *   2. Any candidate swing whose index is more than $maxGap bars beyond the
+     *      previously accepted wave is rejected — no more multi-week gaps.
+     */
+    private function tryLabelFromOffset(array $swings, int $startOffset, bool $bullish, int $maxGap, float $minMove = 0, array $candles = [], string $timeframe = '5M'): array
     {
         $available = array_slice($swings, $startOffset);
         if (count($available) < 5) {
             return [];
         }
 
-        // Determine impulse direction from the first two swings
-        $bullish = $available[1]['price'] > $available[0]['price'];
+        // The swing immediately before the start offset (if any) is the TRUE
+        // origin of Wave 1 — the pivot where the impulse began. validateRules
+        // needs this to check Rule 2 (W2 must not retrace past W1 start).
+        $originPrice = $startOffset > 0 ? (float) $swings[$startOffset - 1]['price'] : null;
 
         $waves = [];
         $fullSequence = ['1', '2', '3', '4', '5', 'A', 'B', 'C'];
@@ -324,7 +600,9 @@ class ElliottWaveEngine implements EngineInterface
             $label = $fullSequence[$labelIdx];
             $isCorrection = in_array($label, $correctionLabels);
 
-            // Build candidate wave entry
+            // Build candidate wave entry. Attach the true W1-origin price to
+            // the first wave of the chain so validateRules can correctly
+            // evaluate Rule 2 (W2 can't retrace past W1 origin).
             $candidate = [
                 'label' => $label,
                 'swing_type' => $swing['type'],
@@ -333,17 +611,125 @@ class ElliottWaveEngine implements EngineInterface
                 'index' => $swing['index'],
                 'phase' => $isCorrection ? 'CORRECTION' : 'IMPULSE',
             ];
+            if ($label === '1' && empty($waves) && $originPrice !== null) {
+                $candidate['origin_price'] = $originPrice;
+            }
+
+            // FIX B — Enforce max bar gap relative to the last accepted wave.
+            // Break entirely (not "skip") once the candidate is too far: every
+            // subsequent swing will only be even further, so the chain ends here.
+            if (! empty($waves)) {
+                $prevIdx = (int) end($waves)['index'];
+                if (($candidate['index'] - $prevIdx) > $maxGap) {
+                    break;
+                }
+
+                // Session gap detection: prevent stitching waves across multi-day
+                // gaps where bar indices are close (holiday candles missing) but
+                // actual calendar time is far apart. A gap-up after 5 calendar days
+                // is a structural event — the prior wave count is no longer valid.
+                $maxHours = self::MAX_HOURS_BETWEEN_WAVES[$timeframe] ?? 96;
+                $prevUnix = strtotime(end($waves)['timestamp']);
+                $currUnix = strtotime($candidate['timestamp']);
+                if ($prevUnix > 0 && $currUnix > 0) {
+                    $hoursDiff = ($currUnix - $prevUnix) / 3600;
+                    if ($hoursDiff > $maxHours) {
+                        break;
+                    }
+                }
+            }
 
             // Validate this wave against Elliott rules using already-labeled waves
             if ($this->validateWaveInline($candidate, $waves, $bullish)) {
+                // FIX 1 — ATR-based minimum wave size filter.
+                // After Elliott rule validation passes, also check that the
+                // price move from the previous wave is at least $minMove.
+                // This prevents micro-swings (e.g. 247 pts on a 300-pt ATR)
+                // from being accepted as waves, which would create grotesquely
+                // disproportionate impulse counts (tiny W1/W2, massive W3).
+                if ($minMove > 0 && ! empty($waves)) {
+                    $moveSize = abs($candidate['price'] - end($waves)['price']);
+                    if ($moveSize < $minMove) {
+                        // Too small — skip this swing, try the next one
+                        $idx++;
+                        continue;
+                    }
+                }
+
+                // W3 look-ahead: verify a feasible W4 exists before committing.
+                // Without this, the engine accepts tiny W3 candidates (barely
+                // above W1) that are dead-ends — no valid W4 exists between W2
+                // and W3. Meanwhile the REAL W3 (e.g. a gap-up high) sits
+                // further ahead. By checking feasibility first, the engine
+                // skips dead-end W3s and finds the structurally correct one.
+                if ($label === '3') {
+                    $w4Feasible = false;
+                    $tempWaves = array_merge($waves, [$candidate]);
+                    $maxPeek = min(count($available), $idx + 30);
+                    $peekMaxHours = self::MAX_HOURS_BETWEEN_WAVES[$timeframe] ?? 96;
+                    for ($peek = $idx + 1; $peek < $maxPeek; $peek++) {
+                        $ps = $available[$peek];
+                        // Check bar gap from W3
+                        if (($ps['index'] - $candidate['index']) > $maxGap) break;
+                        // Check session gap from W3
+                        $ptd = (strtotime($ps['timestamp']) - strtotime($candidate['timestamp'])) / 3600;
+                        if ($ptd > $peekMaxHours) break;
+                        // Build a W4 candidate and validate
+                        $peekW4 = [
+                            'label' => '4',
+                            'swing_type' => $ps['type'],
+                            'price' => $ps['price'],
+                            'timestamp' => $ps['timestamp'],
+                            'index' => $ps['index'],
+                            'phase' => 'IMPULSE',
+                        ];
+                        if ($this->validateWaveInline($peekW4, $tempWaves, $bullish)) {
+                            // Also respect min move for W4
+                            if ($minMove > 0) {
+                                $w4Move = abs($ps['price'] - $candidate['price']);
+                                if ($w4Move < $minMove) continue;
+                            }
+                            $w4Feasible = true;
+                            break;
+                        }
+                    }
+                    if (! $w4Feasible) {
+                        // This W3 is a dead end — skip and try next swing as W3
+                        $idx++;
+                        continue;
+                    }
+                }
+
                 $waves[] = $candidate;
                 $labelIdx++;
                 $idx++;
 
-                // After full cycle (8 waves), start new cycle with flipped trend
+                // FIX 2 — After full cycle (8 waves = 1-5 + A-B-C), decide
+                // the direction for the next cycle using slope re-evaluation
+                // instead of blind flip. The blind flip assumed the next
+                // impulse always reverses, but in trending markets the new
+                // impulse often continues in the same direction (e.g. after
+                // a corrective A-B-C in a bull market, the next 1-5 is also
+                // bullish). Use price slope from the current candle position
+                // to determine actual direction.
                 if ($labelIdx >= count($fullSequence) && $idx < count($available)) {
                     $labelIdx = 0;
-                    $bullish = ! $bullish;
+                    if (! empty($candles) && isset($available[$idx])) {
+                        // Re-evaluate direction from the swing's candle position
+                        $currentIdx = $available[$idx]['index'];
+                        $lookback = min(60, max(20, (int) ($currentIdx * 0.1)));
+                        $sliceStart = max(0, $currentIdx - $lookback);
+                        $sliceEnd = min(count($candles), $currentIdx + 1);
+                        $slice = array_slice($candles, $sliceStart, $sliceEnd - $sliceStart);
+                        if (count($slice) >= 3) {
+                            $firstClose = (float) $slice[0]['close'];
+                            $lastClose = (float) end($slice)['close'];
+                            $bullish = $lastClose >= $firstClose;
+                        }
+                        // If slice is too small, keep current $bullish as-is
+                    }
+                    // Fallback: if no candles were provided, keep $bullish unchanged
+                    // (safer than blind flip since slope is unknown)
                 }
             } else {
                 // This swing doesn't fit the current label — skip it
@@ -426,16 +812,31 @@ class ElliottWaveEngine implements EngineInterface
                 if ($bullish && $candidate['swing_type'] !== 'low') return false;
                 if (! $bullish && $candidate['swing_type'] !== 'high') return false;
 
-                // Rule 4: W4 must NOT overlap W1 price territory
-                if ($bullish && $price < $w1['price']) return false;
-                if (! $bullish && $price > $w1['price']) return false;
+                // FIX: W4 must actually RETRACE from W3.
+                // In bullish: W4 (a low/pullback) must be BELOW W3 (the high).
+                // In bearish: W4 (a high/bounce) must be ABOVE W3 (the low).
+                // Without this, a gap-up can place W4 above W3 — physically
+                // impossible in a valid impulse structure. The abs() in the
+                // retrace calculation masked this directional error.
+                if ($bullish && $price >= $w3['price']) return false;
+                if (! $bullish && $price <= $w3['price']) return false;
 
-                // Fibonacci: W4 typically retraces 23.6%-50% of W3
+                // Rule 4 (soft inline check): allow the labeler to accept W4 even
+                // with moderate overlap into W1 territory. The hard quality check
+                // lives in validateRules() which penalizes health score (warning,
+                // -20 pts) for ANY overlap. Here we only reject extreme overlap
+                // (W4 retracing past W2, which would make the structure nonsensical).
+                if ($bullish && $price < $w2['price']) return false; // W4 below W2 = absurd
+                if (! $bullish && $price > $w2['price']) return false; // W4 above W2 = absurd
+
+                // Fibonacci: W4 typically retraces 23.6%-50% of W3,
+                // but can reach 78.6% in expanded flats. Hard cap at 0.786
+                // to avoid rejecting valid deep corrections.
                 $w3Len = abs($w3['price'] - $w2['price']);
                 $w4Retrace = abs($w3['price'] - $price);
                 $retracePct = $w3Len > 0 ? $w4Retrace / $w3Len : 0;
-                if ($retracePct > 0.65) return false; // W4 shouldn't retrace >65% of W3
-                if ($retracePct < 0.15) return false; // Too shallow — probably not a real W4
+                if ($retracePct > 0.786) return false; // W4 shouldn't retrace >78.6% of W3
+                if ($retracePct < 0.05) return false; // Too shallow — probably not a real W4
 
                 return true;
 
@@ -501,15 +902,36 @@ class ElliottWaveEngine implements EngineInterface
 
     /**
      * Validate Elliott Wave rules and calculate health score.
+     *
+     * FIX B — The labeler emits multiple sequential cycles (1-5 A-B-C)(1-5 A-B-C)…
+     * and we only care about the MOST RECENT cycle. Building $byLabel across all
+     * waves lets stale cycle-2 "5" overwrite cycle-3 "5", producing fake
+     * wave-length calculations that cross cycle boundaries and firing spurious
+     * Rule 3 (W3 shortest) violations on perfectly valid counts.
+     *
+     * Extract the last cycle (backwards scan until we see a label we've already
+     * encountered) and validate only those waves.
      */
     private function validateRules(array $waves): array
     {
         $violations = [];
         $score = 100;
 
-        // Build lookup by label
+        // Extract the most recent cycle only. A new cycle always starts at
+        // label '1', so the last cycle is the slice starting at the LAST
+        // occurrence of '1'. If there is no '1' we fall back to the full array.
+        $lastOneIdx = -1;
+        for ($i = count($waves) - 1; $i >= 0; $i--) {
+            if ($waves[$i]['label'] === '1') {
+                $lastOneIdx = $i;
+                break;
+            }
+        }
+        $lastCycle = $lastOneIdx >= 0 ? array_slice($waves, $lastOneIdx) : $waves;
+
+        // Build lookup by label from the last cycle only.
         $byLabel = [];
-        foreach ($waves as $w) {
+        foreach ($lastCycle as $w) {
             $byLabel[$w['label']] = $w;
         }
 
@@ -518,38 +940,53 @@ class ElliottWaveEngine implements EngineInterface
             return ['score' => $score, 'violations' => $violations];
         }
 
-        $w1Start = $byLabel['1']['price'];
-        $w1End = $byLabel['2']['price'];  // Wave 1 ends where wave 2 starts
-        $w2End = $byLabel['2']['price'];
-        $w3End = $byLabel['4']['price'];  // Wave 3 ends where wave 4 starts
-        $w4End = $byLabel['4']['price'];
-        $w5End = $byLabel['5']['price'];
+        // Labels in this engine sit at the END of each wave segment:
+        //   label '1' = end of W1, label '2' = end of W2, etc.
+        // The TRUE origin of W1 is stored on the first wave via origin_price
+        // (added in tryLabelFromOffset). Without it Rule 2 is inconclusive.
+        $w1Origin = $byLabel['1']['origin_price'] ?? null;
+        $w1End    = $byLabel['1']['price'];   // end of Wave 1
+        $w2End    = $byLabel['2']['price'];   // end of Wave 2
+        $w3End    = $byLabel['3']['price'];   // end of Wave 3
+        $w4End    = $byLabel['4']['price'];   // end of Wave 4
+        $w5End    = $byLabel['5']['price'];   // end of Wave 5
 
-        $isBullish = $byLabel['3']['price'] > $byLabel['1']['price'];
+        // In a bullish impulse W1 ends higher than its origin; in a bearish
+        // impulse it ends lower. Use swing_type of label '1' as the primary
+        // signal — bullish if label '1' sits on a HIGH swing.
+        $isBullish = ($byLabel['1']['swing_type'] ?? 'high') === 'high';
 
-        // Rule 2: Wave 2 cannot retrace beyond the start of Wave 1
-        if ($isBullish) {
-            if ($w2End < $w1Start) {
-                $violations[] = [
-                    'rule' => 2,
-                    'description' => 'Wave 2 retraced below Wave 1 start',
-                    'severity' => 'critical',
-                ];
-                $score -= 30;
-            }
-        } else {
-            if ($w2End > $w1Start) {
-                $violations[] = [
-                    'rule' => 2,
-                    'description' => 'Wave 2 retraced above Wave 1 start',
-                    'severity' => 'critical',
-                ];
-                $score -= 30;
+        // Rule 2: Wave 2 cannot retrace beyond the ORIGIN of Wave 1.
+        // Only evaluate when we actually know the origin — otherwise we'd
+        // raise spurious violations on perfectly valid counts.
+        if ($w1Origin !== null) {
+            if ($isBullish) {
+                if ($w2End < $w1Origin) {
+                    $violations[] = [
+                        'rule' => 2,
+                        'description' => 'Wave 2 retraced below Wave 1 origin',
+                        'severity' => 'critical',
+                    ];
+                    $score -= 30;
+                }
+            } else {
+                if ($w2End > $w1Origin) {
+                    $violations[] = [
+                        'rule' => 2,
+                        'description' => 'Wave 2 retraced above Wave 1 origin',
+                        'severity' => 'critical',
+                    ];
+                    $score -= 30;
+                }
             }
         }
 
-        // Rule 3: Wave 3 must not be the shortest impulse wave
-        $wave1Len = abs($w1End - $w1Start);
+        // Rule 3: Wave 3 must not be the shortest impulse wave.
+        // Wave lengths are measured end-to-end:
+        //   W1 = |w1End - w1Origin|  (falls back to W1→W2 gap if no origin)
+        //   W3 = |w3End - w2End|
+        //   W5 = |w5End - w4End|
+        $wave1Len = $w1Origin !== null ? abs($w1End - $w1Origin) : abs($w2End - $w1End);
         $wave3Len = abs($w3End - $w2End);
         $wave5Len = abs($w5End - $w4End);
 
@@ -1136,15 +1573,35 @@ class ElliottWaveEngine implements EngineInterface
             }
         }
 
-        // Wave-position direction map: true = with-trend, false = counter-trend
-        // Impulse waves (1,3,5) move WITH the trend; corrective (2,4) move AGAINST.
-        // ABC correction: A,C move AGAINST the prior impulse; B moves WITH it.
-        $withTrend = in_array($label, ['1', '3', '5', 'B'], true);
-        $counterTrend = in_array($label, ['2', '4', 'A', 'C'], true);
+        // Tradeable entry direction — NOT the current momentum direction.
+        // The confluence engine uses this to decide CALL vs PUT, so it must
+        // answer "which way should we trade from here?" not "which way is
+        // price moving at this instant?"
+        //
+        //   Impulse phase (1..5): the whole 5-wave structure is a trend move.
+        //     Pullback waves (2, 4) are BUY-the-dip entries in a bullish
+        //     impulse — entering during the pullback is how you catch the
+        //     next impulse leg. So all impulse labels trade WITH the impulse.
+        //
+        //   Corrective phase (A, B, C): the ABC is a counter-trend move.
+        //     A and C are the counter-trend legs, B is the counter-correction.
+        //     Trading the correction means fading the prior impulse → direction
+        //     is OPPOSITE of bullishImpulse. Wave C is typically where the
+        //     corrective move exhausts; after C, a new impulse starts in the
+        //     ORIGINAL direction.
+        $isImpulseLabel  = in_array($label, ['1', '2', '3', '4', '5'], true);
+        $isCorrectionLabel = in_array($label, ['A', 'B', 'C'], true);
 
-        if ($withTrend) {
+        if ($isImpulseLabel) {
+            // All impulse sub-waves trade with the impulse direction.
             $direction = $bullishImpulse ? 'buy' : 'sell';
-        } elseif ($counterTrend) {
+        } elseif ($label === 'C') {
+            // Wave C completing = correction ending; anticipate the next
+            // impulse cycle in the original trend direction.
+            $direction = $bullishImpulse ? 'buy' : 'sell';
+        } elseif ($isCorrectionLabel) {
+            // A and B: correction still unfolding, trade against the prior
+            // impulse.
             $direction = $bullishImpulse ? 'sell' : 'buy';
         } else {
             // Unknown label — fallback to swing type

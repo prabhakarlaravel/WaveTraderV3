@@ -150,6 +150,11 @@ class RunEnginesJob implements ShouldQueue, ShouldBeUnique
         // Compute HTF bias from cached overlays across 1D, 4H, 1H
         $htfBias = $this->computeHtfBias($symbol->id);
 
+        // Build per-TF trend map so ConfluenceEngine can check alignment
+        // across EVERY timeframe above the active one — not just the
+        // aggregate bias which can hide 4H+1H agreement under a noisy 1D.
+        $htfTrends = $this->computeHtfTrends($symbol->id);
+
         // Compute confluence score with HTF bias (Layer 2 conflict gate)
         $lastClose = ! empty($candles) ? (float) end($candles)['close'] : 0;
         $confluence = null;
@@ -157,7 +162,7 @@ class RunEnginesJob implements ShouldQueue, ShouldBeUnique
             if ($ew && $ms && $ob && $fvg && $smc && $vwap && $pa) {
                 $confluence = (new ConfluenceEngine())->score(
                     $ew, $ms, $ob, $fvg, $smc, $vwap, $pa,
-                    $lastClose, $htfBias, $this->timeframe,
+                    $lastClose, $htfBias, $this->timeframe, $htfTrends,
                 );
             }
         } catch (\Throwable $e) {
@@ -244,6 +249,27 @@ class RunEnginesJob implements ShouldQueue, ShouldBeUnique
         }
 
         return 'NEUTRAL';
+    }
+
+    /**
+     * Build a per-timeframe trend map for every cached TF.
+     * Returns ['1M'=>'BULL'|'BEAR'|'NEUTRAL', ...]. Missing TFs map to NEUTRAL.
+     */
+    private function computeHtfTrends(int $symbolId): array
+    {
+        $tfs = ['1M', '5M', '15M', '1H', '4H', '1D'];
+        $map = [];
+        foreach ($tfs as $tf) {
+            $cached = self::getCachedOverlays($symbolId, $tf);
+            $trend = $cached['metadata']['trend'] ?? 'neutral';
+            $map[$tf] = match ($trend) {
+                'bullish' => 'BULL',
+                'bearish' => 'BEAR',
+                default => 'NEUTRAL',
+            };
+        }
+
+        return $map;
     }
 
     /**

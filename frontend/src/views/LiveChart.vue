@@ -157,6 +157,7 @@ function debouncedRender() {
 let lastSetDataLength = 0
 let lastRenderedSymbolId = null
 let lastRenderedTimeframe = null
+let hasAdjustedForWaves = false
 
 function updateChartData() {
   if (!candleSeriesRef.value) return
@@ -173,7 +174,14 @@ function updateChartData() {
   if (symbolChanged || tfChanged || Math.abs(candles.length - lastSetDataLength) > 2 || lastSetDataLength === 0) {
     candleSeriesRef.value.setData(candles)
     volumeSeries.setData(volume)
-    chartRef.value.timeScale().scrollToRealTime()
+    // Show last 300 bars initially. When wave labels arrive asynchronously
+    // (overlay fetch completes after this), the watcher below will re-adjust
+    // the range to include the full wave structure.
+    hasAdjustedForWaves = false // reset so wave watcher will fire
+    const ts = chartRef.value.timeScale()
+    const total = candles.length
+    const windowSize = Math.min(300, total)
+    ts.setVisibleLogicalRange({ from: Math.max(0, total - windowSize), to: total + 5 })
     lastSetDataLength = candles.length
     lastRenderedSymbolId = chartStore.activeSymbolId
     lastRenderedTimeframe = chartStore.activeTimeframe
@@ -257,6 +265,39 @@ onUnmounted(() => {
 // Consolidated watchers — all use debouncedRender to avoid multiple renderAll() per frame
 watch(() => chartStore.formattedCandles, () => { updateChartData(); debouncedRender() })
 watch(overlayToggles, () => debouncedRender(), { deep: true })
+
+// When wave labels first arrive (async overlay fetch completes after chart init),
+// re-adjust the visible range to include the full wave structure. Without this,
+// waves from earlier in the visible window end up off-screen to the left because
+// the initial setVisibleLogicalRange ran before overlays loaded.
+watch(() => chartStore.overlays?.waveLabels, (labels) => {
+  if (!labels || labels.length < 3 || hasAdjustedForWaves) return
+  if (!chartRef.value || !candleSeriesRef.value) return
+  hasAdjustedForWaves = true
+
+  const rawCandles = chartStore.candles
+  const total = rawCandles.length
+  if (total === 0) return
+
+  // Find the raw candle index closest to the first wave label timestamp.
+  // Both use UTC ISO strings so direct string comparison works.
+  const firstTs = labels[0]?.timestamp
+  if (!firstTs) return
+  const firstWaveDate = new Date(firstTs.endsWith('Z') ? firstTs : firstTs + 'Z').getTime()
+
+  let startIdx = Math.max(0, total - 300) // fallback
+  for (let i = Math.max(0, total - 600); i < total; i++) {
+    const cTs = rawCandles[i]?.timestamp
+    if (!cTs) continue
+    const cDate = new Date(cTs.endsWith('Z') ? cTs : cTs + 'Z').getTime()
+    if (cDate >= firstWaveDate) {
+      startIdx = Math.max(0, i - 20) // 20-bar left padding
+      break
+    }
+  }
+  chartRef.value.timeScale().setVisibleLogicalRange({ from: startIdx, to: total + 5 })
+  debouncedRender()
+}, { deep: false })
 </script>
 
 <template>
@@ -356,11 +397,11 @@ watch(overlayToggles, () => debouncedRender(), { deep: true })
         <!-- Bias strip below chart — simplified for basic users -->
         <div class="bias-strip">
           <!-- Market Trend card -->
-          <div :class="['bias-card', htfDir === 'BULL' ? 'bull' : htfDir === 'BEAR' ? 'bear' : 'warn']">
+          <div :class="['bias-card', (confluence?.marketTrend?.direction || htfDir) === 'BULL' ? 'bull' : (confluence?.marketTrend?.direction || htfDir) === 'BEAR' ? 'bear' : 'warn']">
             <span class="bias-emoji">{{ confluence?.marketTrend?.emoji || '⏳' }}</span>
             <div>
               <div class="bias-label">Market Trend</div>
-              <div class="bias-value" :style="{ color: htfDir === 'BULL' ? 'var(--bull)' : htfDir === 'BEAR' ? 'var(--bear)' : 'var(--dim)' }">
+              <div class="bias-value" :style="{ color: (confluence?.marketTrend?.direction || htfDir) === 'BULL' ? 'var(--bull)' : (confluence?.marketTrend?.direction || htfDir) === 'BEAR' ? 'var(--bear)' : 'var(--dim)' }">
                 {{ confluence?.marketTrend?.label || (htfDir === 'BULL' ? 'Uptrend' : htfDir === 'BEAR' ? 'Downtrend' : 'Sideways') }}
               </div>
             </div>
