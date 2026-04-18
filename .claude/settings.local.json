@@ -286,7 +286,11 @@
       "Bash(powershell.exe -Command \"powershell.exe -ExecutionPolicy Bypass -File 'C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\timing2.ps1'\")",
       "Bash(powershell.exe -Command \"curl.exe -s -v -X POST -H 'Content-Type: application/json' --data '{\\\\\"\\\\\"symbol_id\\\\\"\\\\\":8}' http://localhost:8000/api/v1/wave-health/validate 2>&1 | Select-Object -Last 20\")",
       "Bash(powershell.exe -Command \"Remove-Item C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\timing.ps1, C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\timing2.ps1 -ErrorAction SilentlyContinue; echo done\")",
-      "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php -l app/Services/WaveHealthService.php; php -l app/Http/Controllers/Api/WaveController.php\")"
+      "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php -l app/Services/WaveHealthService.php; php -l app/Http/Controllers/Api/WaveController.php\")",
+      "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php wave_health_improve.php 2>&1\")",
+      "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php wave_health_regen.php 2>&1\")",
+      "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php wave_health_inspect.php 2>&1\")",
+      "Bash(powershell.exe -Command \"Remove-Item C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\wave_health_improve.php, C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\wave_health_regen.php, C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\wave_health_inspect.php -ErrorAction SilentlyContinue; echo done\")"
     ]
   }
 }
