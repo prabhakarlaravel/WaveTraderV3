@@ -7,6 +7,8 @@ Broadcast::channel('App.Models.User.{id}', function ($user, $id) {
 });
 
 // Public channels — no auth required
+// Channel names use sanitized symbols: spaces replaced with hyphens, lowercased.
+// e.g. "NIFTY BANK" becomes "nifty-bank" → channel "candles.nifty-bank.1M"
 Broadcast::channel('candles.{symbol}.{timeframe}', fn () => true);
 Broadcast::channel('waves.{symbol}', fn () => true);
 Broadcast::channel('signals.{symbol}', fn () => true);

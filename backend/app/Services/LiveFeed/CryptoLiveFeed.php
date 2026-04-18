@@ -103,8 +103,9 @@ class CryptoLiveFeed implements LiveFeedInterface
 
     private function publishToRedis(string $symbol, string $timeframe, array $candle): void
     {
+        $sanitized = str_replace(' ', '-', strtolower($symbol));
         try {
-            Redis::publish("candles:{$symbol}:{$timeframe}", json_encode([
+            Redis::publish("candles:{$sanitized}:{$timeframe}", json_encode([
                 'symbol' => $symbol,
                 'timeframe' => $timeframe,
                 'candle' => $candle,

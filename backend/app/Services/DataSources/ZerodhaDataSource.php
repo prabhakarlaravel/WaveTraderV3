@@ -57,7 +57,11 @@ class ZerodhaDataSource implements DataSourceInterface
         $allCandles = collect();
         $chunkFrom = $from->copy();
 
-        // KiteConnect allows max 60 days per historical data request
+        // KiteConnect allows max 60 days per historical data request.
+        // CRITICAL: Zerodha expects IST-formatted timestamp strings, regardless of the
+        // Carbon instance's source timezone. Always convert to Asia/Kolkata before
+        // formatting — otherwise UTC-source timestamps (from DB or Carbon::now()) get
+        // misinterpreted as IST and the API returns data for the wrong time window.
         while ($chunkFrom->lt($to)) {
             $chunkTo = $chunkFrom->copy()->addDays(self::MAX_DAYS_PER_REQUEST);
             if ($chunkTo->gt($to)) {
@@ -66,8 +70,8 @@ class ZerodhaDataSource implements DataSourceInterface
 
             $candles = $this->requestCandles(
                 $instrumentToken, $interval,
-                $chunkFrom->format('Y-m-d H:i:s'),
-                $chunkTo->format('Y-m-d H:i:s'),
+                $chunkFrom->copy()->setTimezone('Asia/Kolkata')->format('Y-m-d H:i:s'),
+                $chunkTo->copy()->setTimezone('Asia/Kolkata')->format('Y-m-d H:i:s'),
                 $apiKey, $accessToken, $timeframe
             );
 

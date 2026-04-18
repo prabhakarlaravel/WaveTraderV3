@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Events;
 
+use App\Traits\SanitizesChannelName;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
@@ -11,6 +12,7 @@ use Illuminate\Foundation\Events\Dispatchable;
 class OrderBlockUpdated implements ShouldBroadcastNow
 {
     use Dispatchable;
+    use SanitizesChannelName;
 
     public function __construct(
         public readonly string $symbol,
@@ -19,6 +21,6 @@ class OrderBlockUpdated implements ShouldBroadcastNow
 
     public function broadcastOn(): Channel
     {
-        return new Channel("signals.{$this->symbol}");
+        return new Channel('signals.' . static::sanitizeChannel($this->symbol));
     }
 }

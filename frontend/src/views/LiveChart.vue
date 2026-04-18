@@ -169,9 +169,10 @@ function updateChartData() {
   const symbolChanged = chartStore.activeSymbolId !== lastRenderedSymbolId
   const tfChanged = chartStore.activeTimeframe !== lastRenderedTimeframe
 
-  // Full setData on: initial load, symbol switch, TF switch, or significant candle count change
-  // Use update() only for live 30s ticks — smooth, no flicker
-  if (symbolChanged || tfChanged || Math.abs(candles.length - lastSetDataLength) > 2 || lastSetDataLength === 0) {
+  // Full setData ONLY on: initial load, symbol switch, or TF switch.
+  // Live polling additions (even 3+ new candles) use the incremental update() path
+  // to prevent the chart from jumping/repositioning every 30 seconds.
+  if (symbolChanged || tfChanged || lastSetDataLength === 0) {
     candleSeriesRef.value.setData(candles)
     volumeSeries.setData(volume)
     // Show last 300 bars initially. When wave labels arrive asynchronously
@@ -186,16 +187,34 @@ function updateChartData() {
     lastRenderedSymbolId = chartStore.activeSymbolId
     lastRenderedTimeframe = chartStore.activeTimeframe
   } else {
-    // Live update: update the current forming candle + append new ones
-    const last = candles[candles.length - 1]
-    const lastVol = volume[volume.length - 1]
-    try {
-      candleSeriesRef.value.update(last)
-      volumeSeries.update(lastVol)
-    } catch {
-      // Fallback to full setData if update() fails (e.g. time order issue)
-      candleSeriesRef.value.setData(candles)
-      volumeSeries.setData(volume)
+    // Live update path: incrementally update/append candles without resetting the view.
+    // lightweight-charts update() handles both "update last bar" and "append new bar".
+    // We must call update() for each new candle since the last render, not just the last one.
+    const newCount = candles.length - lastSetDataLength
+    if (newCount > 0) {
+      // Append all new candles that were added since the last render
+      for (let i = lastSetDataLength; i < candles.length; i++) {
+        try {
+          candleSeriesRef.value.update(candles[i])
+          volumeSeries.update(volume[i])
+        } catch {
+          // If any update fails (time order), fall back to setData without repositioning
+          candleSeriesRef.value.setData(candles)
+          volumeSeries.setData(volume)
+          break
+        }
+      }
+    } else {
+      // Same count — just update the forming (last) candle's OHLCV
+      const last = candles[candles.length - 1]
+      const lastVol = volume[volume.length - 1]
+      try {
+        candleSeriesRef.value.update(last)
+        volumeSeries.update(lastVol)
+      } catch {
+        candleSeriesRef.value.setData(candles)
+        volumeSeries.setData(volume)
+      }
     }
     lastSetDataLength = candles.length
   }
@@ -267,9 +286,9 @@ watch(() => chartStore.formattedCandles, () => { updateChartData(); debouncedRen
 watch(overlayToggles, () => debouncedRender(), { deep: true })
 
 // When wave labels first arrive (async overlay fetch completes after chart init),
-// re-adjust the visible range to include the full wave structure. Without this,
-// waves from earlier in the visible window end up off-screen to the left because
-// the initial setVisibleLogicalRange ran before overlays loaded.
+// re-adjust the visible range to include the most recent wave cycle. We find the
+// last occurrence of wave '1' to scope the view to the current cycle only, avoiding
+// massive price ranges when multiple cycles span different price levels.
 watch(() => chartStore.overlays?.waveLabels, (labels) => {
   if (!labels || labels.length < 3 || hasAdjustedForWaves) return
   if (!chartRef.value || !candleSeriesRef.value) return
@@ -279,18 +298,29 @@ watch(() => chartStore.overlays?.waveLabels, (labels) => {
   const total = rawCandles.length
   if (total === 0) return
 
-  // Find the raw candle index closest to the first wave label timestamp.
-  // Both use UTC ISO strings so direct string comparison works.
-  const firstTs = labels[0]?.timestamp
-  if (!firstTs) return
-  const firstWaveDate = new Date(firstTs.endsWith('Z') ? firstTs : firstTs + 'Z').getTime()
+  // Find the start of the LAST cycle — the last wave '1' label.
+  // This prevents compressing the chart when earlier cycles have very different prices.
+  let anchorTs = null
+  for (let i = labels.length - 1; i >= 0; i--) {
+    if (String(labels[i].label) === '1') {
+      anchorTs = labels[i].timestamp
+      break
+    }
+  }
+  // Fallback: if no wave '1' found, use the first label of the last 8 labels
+  if (!anchorTs) {
+    const recentStart = Math.max(0, labels.length - 8)
+    anchorTs = labels[recentStart]?.timestamp
+  }
+  if (!anchorTs) return
+  const anchorDate = new Date(anchorTs.endsWith('Z') ? anchorTs : anchorTs + 'Z').getTime()
 
   let startIdx = Math.max(0, total - 300) // fallback
   for (let i = Math.max(0, total - 600); i < total; i++) {
     const cTs = rawCandles[i]?.timestamp
     if (!cTs) continue
     const cDate = new Date(cTs.endsWith('Z') ? cTs : cTs + 'Z').getTime()
-    if (cDate >= firstWaveDate) {
+    if (cDate >= anchorDate) {
       startIdx = Math.max(0, i - 20) // 20-bar left padding
       break
     }
@@ -382,8 +412,9 @@ watch(() => chartStore.overlays?.waveLabels, (labels) => {
       <!-- Chart column -->
       <div class="chart-col">
         <div ref="chartContainer" class="chart-container">
-          <!-- Loading overlay — shown during symbol/TF switch -->
-          <div v-if="chartStore.loading" class="chart-loading-overlay">
+          <!-- Loading overlay — shown only when chart has no data yet (initial load / symbol switch).
+               Never block the chart if candles already exist — prevents stuck-loading issues. -->
+          <div v-if="chartStore.loading && chartStore.candles.length === 0" class="chart-loading-overlay">
             <div class="chart-spinner"></div>
             <div class="chart-loading-text">Loading chart...</div>
           </div>

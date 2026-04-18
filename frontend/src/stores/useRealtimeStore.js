@@ -64,6 +64,15 @@ export const useRealtimeStore = defineStore('realtime', () => {
   }
 
   /**
+   * Sanitize symbol ticker for use in broadcast channel names.
+   * Reverb/Pusher channel names cannot contain spaces.
+   * e.g. "NIFTY BANK" -> "nifty-bank"
+   */
+  function sanitizeChannel(sym) {
+    return sym.replace(/\s+/g, '-').toLowerCase()
+  }
+
+  /**
    * Subscribe to all WebSocket channels for the active symbol.
    */
   function subscribe(symbol, timeframe) {
@@ -77,8 +86,10 @@ export const useRealtimeStore = defineStore('realtime', () => {
     // Fetch market status first
     fetchMarketStatus()
 
+    const safeSymbol = sanitizeChannel(symbol)
+
     // Candle updates
-    const candleChannel = `candles.${symbol}.${timeframe}`
+    const candleChannel = `candles.${safeSymbol}.${timeframe}`
     try {
       echo.channel(candleChannel)
         .listen('CandleUpdated', (e) => {
@@ -92,7 +103,7 @@ export const useRealtimeStore = defineStore('realtime', () => {
     }
 
     // Signal updates
-    const signalChannel = `signals.${symbol}`
+    const signalChannel = `signals.${safeSymbol}`
     try {
       echo.channel(signalChannel)
         .listen('SignalGenerated', (e) => {
@@ -111,7 +122,7 @@ export const useRealtimeStore = defineStore('realtime', () => {
     }
 
     // Wave updates
-    const waveChannel = `waves.${symbol}`
+    const waveChannel = `waves.${safeSymbol}`
     try {
       echo.channel(waveChannel)
         .listen('WaveUpdated', () => {
@@ -123,7 +134,7 @@ export const useRealtimeStore = defineStore('realtime', () => {
     }
 
     // Overlay updates — full payload pushed from RunEnginesJob via Redis cache
-    const overlayChannel = `overlays.${symbol}.${timeframe}`
+    const overlayChannel = `overlays.${safeSymbol}.${timeframe}`
     try {
       echo.channel(overlayChannel)
         .listen('OverlaysUpdated', (e) => {

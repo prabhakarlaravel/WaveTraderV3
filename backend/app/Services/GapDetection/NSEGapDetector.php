@@ -313,60 +313,107 @@ class NSEGapDetector implements GapDetectorInterface
         $totalFilled = 0;
 
         foreach ($gaps as $gap) {
-            $from = Carbon::parse($gap->gap_start);
-            $to = Carbon::parse($gap->gap_end);
+            // Gap timestamps are stored in UTC. Convert to IST to anchor the full
+            // NSE trading-day window (09:15–15:30 IST) regardless of how the gap
+            // was originally clipped. This — combined with ZerodhaDataSource's
+            // IST-forced formatting — ensures we always ask Zerodha for the real
+            // market hours of the correct day.
+            $gapStartIST = Carbon::parse($gap->gap_start)->setTimezone(self::TIMEZONE);
+            $dayIST = $gapStartIST->copy()->startOfDay();
+            $from = $dayIST->copy()->setTime(self::MARKET_OPEN_HOUR, self::MARKET_OPEN_MINUTE);
+            $to   = $dayIST->copy()->setTime(self::MARKET_CLOSE_HOUR, self::MARKET_CLOSE_MINUTE);
 
-            Log::info("NSEGapDetector: Gap {$from->toDateString()} [{$timeframe}]");
+            $dateKey = $dayIST->format('Y-m-d');
+            $isKnownHoliday = $this->isNseHoliday($dayIST);
+
+            Log::info("NSEGapDetector: Gap {$dateKey} [{$timeframe}]"
+                . ($isKnownHoliday ? ' (NSE holiday — skipping fetch)' : ''));
+
+            // Known NSE holiday — mark filled immediately, no fetch needed
+            if ($isKnownHoliday) {
+                $gap->update(['filled_at' => Carbon::now()]);
+                continue;
+            }
 
             if ($timeframe === '1M') {
-                // Fetch 1M candles from Zerodha for this specific trading day's market hours
+                // Fetch 1M candles from Zerodha for the full trading-day window
                 $filled = $this->fetch1MFromExchange($symbol, $from, $to);
                 $totalFilled += $filled;
 
                 if ($filled > 0) {
-                    // Also aggregate higher TFs for this day
+                    // Aggregate higher TFs for this day using the filled 1M data
                     $this->aggregateAllHigherTFs($symbol->id, $from, $to);
+                }
+
+                // Verify day completeness before marking filled. If the day is
+                // still below the completeness threshold, leave filled_at=null
+                // so the next scan/fill cycle retries.
+                if ($this->isDayComplete($symbol->id, '1M', $dayIST)) {
                     $gap->update(['filled_at' => Carbon::now()]);
-                    Log::info("NSEGapDetector: Filled {$filled} 1M candles for {$from->toDateString()}");
+                    Log::info("NSEGapDetector: Filled {$filled} 1M candles for {$dateKey} — day complete");
                 } else {
-                    Log::warning("NSEGapDetector: 0 candles from Zerodha for {$from->toDateString()} — may be a holiday");
-                    // Mark as filled if it's likely a holiday (no data available)
-                    $gap->update(['filled_at' => Carbon::now()]);
+                    // Not a known holiday and still incomplete — likely a transient
+                    // fetch issue (rate limit, network, token). Leave unfilled for retry.
+                    Log::warning("NSEGapDetector: {$dateKey} still incomplete after fetch ({$filled} new 1M candles) — will retry next run");
                 }
             } else {
-                // Higher TFs: aggregate from existing 1M data
+                // Higher TFs: aggregate from existing 1M data (rule #10 — never
+                // fetch higher TFs directly when 1M can be aggregated).
                 $existing1M = Candle::where('symbol_id', $symbol->id)
                     ->where('timeframe', '1M')
-                    ->whereBetween('timestamp', [$from, $to])
+                    ->whereBetween('timestamp', [$from->copy()->setTimezone('UTC'), $to->copy()->setTimezone('UTC')])
                     ->count();
 
-                if ($existing1M > 0) {
-                    // 1M data exists — aggregate directly
-                    $aggregated = $this->aggregateTimeframe($symbol->id, $timeframe, $from, $to);
-                    $totalFilled += $aggregated;
-
-                    if ($aggregated > 0) {
-                        $gap->update(['filled_at' => Carbon::now()]);
-                        Log::info("NSEGapDetector: Aggregated {$aggregated} {$timeframe} candles from {$existing1M} 1M candles");
-                    }
-                } else {
-                    // No 1M data — fetch from exchange first
+                if ($existing1M === 0) {
+                    // No 1M data for this day — fetch it first, THEN aggregate
                     $fetched = $this->fetch1MFromExchange($symbol, $from, $to);
-                    if ($fetched > 0) {
-                        $aggregated = $this->aggregateTimeframe($symbol->id, $timeframe, $from, $to);
-                        $totalFilled += $fetched + $aggregated;
-                        $gap->update(['filled_at' => Carbon::now()]);
-                        Log::info("NSEGapDetector: Fetched {$fetched} 1M + aggregated {$aggregated} {$timeframe}");
-                    } else {
-                        // Likely a holiday — mark as filled
-                        $gap->update(['filled_at' => Carbon::now()]);
-                        Log::info("NSEGapDetector: No data for {$from->toDateString()} — marking as holiday");
+                    if ($fetched === 0) {
+                        // Still 0 candles from a non-holiday day — leave unfilled for retry
+                        Log::warning("NSEGapDetector: {$dateKey} [{$timeframe}] — 0 candles from Zerodha on non-holiday, will retry");
+                        continue;
                     }
+                    $existing1M = $fetched;
+                }
+
+                $aggregated = $this->aggregateTimeframe($symbol->id, $timeframe, $from, $to);
+                $totalFilled += $aggregated;
+
+                // Verify target-TF completeness before marking filled
+                if ($this->isDayComplete($symbol->id, $timeframe, $dayIST)) {
+                    $gap->update(['filled_at' => Carbon::now()]);
+                    Log::info("NSEGapDetector: Aggregated {$aggregated} {$timeframe} from {$existing1M} 1M — {$dateKey} complete");
+                } else {
+                    Log::warning("NSEGapDetector: {$dateKey} [{$timeframe}] still incomplete after aggregation — will retry next run");
                 }
             }
         }
 
         return $totalFilled;
+    }
+
+    /**
+     * Verify that a trading day has enough candles on a given timeframe to be
+     * considered complete (>= COMPLETENESS_THRESHOLD of EXPECTED_CANDLES_PER_DAY).
+     * Used to decide whether a gap should be marked filled or retried.
+     */
+    private function isDayComplete(int $symbolId, string $timeframe, Carbon $dayIST): bool
+    {
+        $expected = self::EXPECTED_CANDLES_PER_DAY[$timeframe] ?? 1;
+        $minCandles = max(1, (int) floor($expected * self::COMPLETENESS_THRESHOLD));
+
+        $dayStartUTC = $dayIST->copy()
+            ->setTime(self::MARKET_OPEN_HOUR, self::MARKET_OPEN_MINUTE)
+            ->setTimezone('UTC');
+        $dayEndUTC = $dayIST->copy()
+            ->setTime(self::MARKET_CLOSE_HOUR, self::MARKET_CLOSE_MINUTE)
+            ->setTimezone('UTC');
+
+        $count = Candle::where('symbol_id', $symbolId)
+            ->where('timeframe', $timeframe)
+            ->whereBetween('timestamp', [$dayStartUTC, $dayEndUTC])
+            ->count();
+
+        return $count >= $minCandles;
     }
 
     /**
@@ -404,13 +451,16 @@ class NSEGapDetector implements GapDetectorInterface
     {
         $intervalMinutes = self::TIMEFRAME_MINUTES[$timeframe] ?? 5;
 
+        // Candle timestamps are stored in UTC. Convert from/to to UTC before
+        // querying so IST-source Carbon instances don't cause a 5.5h window shift
+        // (which previously caused aggregation to pick up only a sliver of bars).
+        $fromUTC = $from->copy()->setTimezone('UTC')->subMinutes($intervalMinutes);
+        $toUTC   = $to->copy()->setTimezone('UTC')->addMinutes($intervalMinutes);
+
         // Get 1M candles in range (with buffer for bucket alignment)
         $candles1M = Candle::where('symbol_id', $symbolId)
             ->where('timeframe', '1M')
-            ->whereBetween('timestamp', [
-                $from->copy()->subMinutes($intervalMinutes),
-                $to->copy()->addMinutes($intervalMinutes),
-            ])
+            ->whereBetween('timestamp', [$fromUTC, $toUTC])
             ->orderBy('timestamp')
             ->get();
 

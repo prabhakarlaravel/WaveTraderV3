@@ -137,6 +137,16 @@ export const useChartStore = defineStore('chart', () => {
     // Bug fix #1: Clear old overlays immediately so stale data from previous symbol
     // is never rendered on the new symbol's chart
     overlays.value = { ..._emptyOverlays }
+
+    // Safety timeout: force loading=false after 15s to prevent stuck loading state
+    // (e.g. from HMR race conditions or network hangs)
+    const safetyTimer = setTimeout(() => {
+      if (loading.value) {
+        console.warn('[ChartStore] fetchCandles safety timeout — forcing loading=false')
+        loading.value = false
+      }
+    }, 15000)
+
     try {
       const { data } = await axios.get('/api/v1/chart/candles', {
         params: {
@@ -153,7 +163,7 @@ export const useChartStore = defineStore('chart', () => {
       loading.value = false
       throw err
     } finally {
-      // loading already set above
+      clearTimeout(safetyTimer)
     }
   }
 
