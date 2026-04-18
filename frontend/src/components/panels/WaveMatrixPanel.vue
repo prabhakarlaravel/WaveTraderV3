@@ -146,8 +146,31 @@ function healthColor(score) {
   return score >= 75 ? '#34d399' : score >= 50 ? '#fbbf24' : '#ef5350'
 }
 
-// Build SVG wave chart points from waveLabels
-function buildWaveSvg(waveLabels) {
+// Map from a confirmed wave label to the next expected label in an Elliott count.
+// Impulse sequence: 1 → 2 → 3 → 4 → 5 ; Correction sequence: A → B → C → 1 (new cycle).
+function getNextLabel(lastLabel) {
+  const map = { '1':'2', '2':'3', '3':'4', '4':'5', '5':'A', 'A':'B', 'B':'C', 'C':'1' }
+  return map[lastLabel] ?? null
+}
+
+// Given the last two confirmed points, determine whether the running leg
+// should go UP (+1) or DOWN (-1). Elliott legs alternate: if the last
+// confirmed move was up, the next is expected to be down, and vice versa.
+// Returns 0 if direction can't be determined.
+function expectedDirection(points) {
+  if (!points || points.length < 2) return 0
+  const a = points[points.length - 2]
+  const b = points[points.length - 1]
+  if (a.price === b.price) return 0
+  // Last leg went up (a.y > b.y because y is inverted) → next leg expected down
+  return a.price < b.price ? -1 : 1
+}
+
+// Build SVG wave chart points from waveLabels.
+// When called for the active timeframe with a valid livePrice, also produces
+// a "running leg" from the last confirmed pivot out to the live price,
+// labeled with the next expected wave number.
+function buildWaveSvg(waveLabels, livePrice = null, isActiveTf = false) {
   if (!waveLabels || waveLabels.length < 3) return null
 
   let lastWave1Idx = -1
@@ -176,16 +199,22 @@ function buildWaveSvg(waveLabels) {
 
   if (labels.length > 16) labels = labels.slice(-16)
 
+  // Include livePrice in the min/max range so the running-leg endpoint never
+  // overflows the viewport (otherwise a big excursion would clip off-screen).
   const prices = labels.map(w => w.price)
+  if (isActiveTf && Number.isFinite(livePrice)) prices.push(livePrice)
   const minP = Math.min(...prices)
   const maxP = Math.max(...prices)
   const range = maxP - minP || 1
 
   const svgW = 340
-  const svgH = 130
+  const svgH = 150            // bumped from 130 — room for forming-label above the live dot
   const padX = 20
   const padY = 16
-  const usableW = svgW - padX * 2
+  // Reserve horizontal space on the right edge for the running leg endpoint
+  // + forming-label (~ 60px) so confirmed pivots don't crowd against it.
+  const runningLegWidth = (isActiveTf && Number.isFinite(livePrice)) ? 60 : 0
+  const usableW = svgW - padX * 2 - runningLegWidth
   const usableH = svgH - padY * 2
 
   const points = labels.map((w, i) => ({
@@ -194,6 +223,10 @@ function buildWaveSvg(waveLabels) {
     label: w.label,
     price: w.price,
     isCorrection: w.isCorrection,
+    // NOTE: semantic change — "isCurrent" used to flag the last *confirmed*
+    // pivot. With the running-leg addition, the true "current" position is the
+    // live price dot, so this flag is no longer used for the NOW marker.
+    // Kept on the object in case external consumers expect it.
     isCurrent: i === labels.length - 1,
   }))
 
@@ -209,8 +242,68 @@ function buildWaveSvg(waveLabels) {
     corLine = [lastImp, ...correctionPoints].map(p => `${p.x},${p.y}`).join(' ')
   }
 
-  return { points, fullLine, impLine, corLine, minP, maxP, svgW, svgH }
+  // ── Running leg (live edge) ──
+  // Only rendered when this is the active timeframe and we have a live price.
+  let runningLeg = null
+  if (isActiveTf && Number.isFinite(livePrice) && points.length > 0) {
+    const lastPt = points[points.length - 1]
+    const liveX = svgW - padX
+    const liveY = padY + (1 - (livePrice - minP) / range) * usableH
+
+    const nextLabel = getNextLabel(lastPt.label)
+    // Determine whether price is moving in the expected direction for the
+    // next leg. If not, render as a warning (red dashed) instead of amber.
+    const dir = expectedDirection(points)
+    const actual = livePrice > lastPt.price ? 1 : livePrice < lastPt.price ? -1 : 0
+    const directionOK = dir === 0 || actual === 0 || dir === actual
+
+    // Next leg inherits correction styling if moving into an A/B/C phase
+    const nextIsCorrection = nextLabel === 'A' || nextLabel === 'B' || nextLabel === 'C'
+
+    runningLeg = {
+      startX: lastPt.x, startY: lastPt.y,
+      endX: liveX, endY: liveY,
+      nextLabel,
+      directionOK,
+      nextIsCorrection,
+      livePrice,
+    }
+  }
+
+  return { points, fullLine, impLine, corLine, minP, maxP, svgW, svgH, runningLeg }
 }
+
+// Live price from the active-timeframe candle poll. chartStore.candles is
+// updated every ~30s by useRealtimeStore; we read the latest close here.
+const livePrice = computed(() => {
+  const candles = chartStore.candles
+  if (!candles || candles.length === 0) return null
+  const last = candles[candles.length - 1]
+  const close = parseFloat(last?.close)
+  return Number.isFinite(close) ? close : null
+})
+
+// Memoized SVG-model accessor for the template. Without this, every v-if /
+// polyline / circle binding would re-run buildWaveSvg() — which is fine for
+// 6 calls per frame but 40+ once we split the model into its subfields.
+// Rebuilt automatically when mtfData, activeTimeframe, or livePrice change.
+const svgModelCache = computed(() => {
+  if (!mtfData.value) return {}
+  const out = {}
+  const activeTf = chartStore.activeTimeframe
+  for (const tf of timeframes) {
+    const row = mtfData.value.timeframes?.[tf]
+    if (row?.waveLabels?.length >= 3) {
+      out[tf] = buildWaveSvg(
+        row.waveLabels,
+        tf === activeTf ? livePrice.value : null,
+        tf === activeTf,
+      )
+    }
+  }
+  return out
+})
+function getSvgModel(tf) { return svgModelCache.value[tf] || null }
 
 // Live timer for "last updated X seconds ago"
 const timeSinceRefresh = ref('')
@@ -311,58 +404,98 @@ function formatPrice(p) {
             <span class="wr-expand" :class="{ open: expandedTf === tf }">▸</span>
           </div>
 
-          <!-- Expanded wave chart for this TF -->
+          <!-- Expanded wave chart for this TF — SVG model is built once per
+               render via the svgModelCache computed (keyed by tf). -->
           <div v-if="expandedTf === tf && getTfRow(tf)?.waveLabels?.length >= 3" class="wave-chart-panel">
             <div class="wc-header">
               <span class="wc-tf">{{ tf }} — {{ getTfRow(tf).degree }}</span>
+              <!-- Dynamic badge: when a running leg exists, shows "Wave 2 → 3 (forming)".
+                   The previous static "Wave 2 · IMPULSE" was misleading because it
+                   described the LAST CONFIRMED wave, not what the chart below shows. -->
               <span class="wc-phase" :class="getTfRow(tf).phase === 'CORRECTION' ? 'phase-cor' : 'phase-imp'">
-                Wave {{ getTfRow(tf).wave }} · {{ getTfRow(tf).phase }}
+                <template v-if="getSvgModel(tf)?.runningLeg">
+                  Wave {{ getTfRow(tf).wave }} → {{ getSvgModel(tf).runningLeg.nextLabel }}
+                  <span class="forming-tag">(forming)</span>
+                  · {{ getTfRow(tf).phase }}
+                </template>
+                <template v-else>
+                  Wave {{ getTfRow(tf).wave }} · {{ getTfRow(tf).phase }}
+                </template>
               </span>
             </div>
 
-            <svg v-if="buildWaveSvg(getTfRow(tf).waveLabels)"
-              class="wave-svg" :viewBox="`0 0 ${buildWaveSvg(getTfRow(tf).waveLabels).svgW} ${buildWaveSvg(getTfRow(tf).waveLabels).svgH}`">
+            <svg v-if="getSvgModel(tf)"
+              class="wave-svg" :viewBox="`0 0 ${getSvgModel(tf).svgW} ${getSvgModel(tf).svgH}`">
 
-              <!-- Grid lines -->
-              <line x1="20" y1="30" :x2="buildWaveSvg(getTfRow(tf).waveLabels).svgW - 10" y2="30" class="grid-line"/>
-              <line x1="20" y1="65" :x2="buildWaveSvg(getTfRow(tf).waveLabels).svgW - 10" y2="65" class="grid-line"/>
-              <line x1="20" y1="100" :x2="buildWaveSvg(getTfRow(tf).waveLabels).svgW - 10" y2="100" class="grid-line"/>
+              <!-- Grid lines — positions now proportional to new svgH=150 -->
+              <line x1="20" y1="30" :x2="getSvgModel(tf).svgW - 10" y2="30" class="grid-line"/>
+              <line x1="20" y1="75" :x2="getSvgModel(tf).svgW - 10" y2="75" class="grid-line"/>
+              <line x1="20" y1="120" :x2="getSvgModel(tf).svgW - 10" y2="120" class="grid-line"/>
 
               <!-- Price labels -->
-              <text x="3" y="33" class="price-lbl">{{ formatPrice(buildWaveSvg(getTfRow(tf).waveLabels).maxP) }}</text>
-              <text x="3" y="103" class="price-lbl">{{ formatPrice(buildWaveSvg(getTfRow(tf).waveLabels).minP) }}</text>
+              <text x="3" y="33" class="price-lbl">{{ formatPrice(getSvgModel(tf).maxP) }}</text>
+              <text x="3" y="123" class="price-lbl">{{ formatPrice(getSvgModel(tf).minP) }}</text>
 
               <!-- Full connected wave path (thin gray) -->
-              <polyline :points="buildWaveSvg(getTfRow(tf).waveLabels).fullLine"
+              <polyline :points="getSvgModel(tf).fullLine"
                 fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1.5"/>
 
               <!-- Impulse segments (thick purple) -->
-              <polyline v-if="buildWaveSvg(getTfRow(tf).waveLabels).impLine"
-                :points="buildWaveSvg(getTfRow(tf).waveLabels).impLine"
+              <polyline v-if="getSvgModel(tf).impLine"
+                :points="getSvgModel(tf).impLine"
                 class="wave-line imp-line"/>
 
               <!-- Correction segments (dashed orange) -->
-              <polyline v-if="buildWaveSvg(getTfRow(tf).waveLabels).corLine"
-                :points="buildWaveSvg(getTfRow(tf).waveLabels).corLine"
+              <polyline v-if="getSvgModel(tf).corLine"
+                :points="getSvgModel(tf).corLine"
                 class="wave-line cor-line"/>
 
-              <!-- Wave label circles + text -->
-              <template v-for="(pt, idx) in buildWaveSvg(getTfRow(tf).waveLabels).points" :key="idx">
+              <!-- ── Running leg: last confirmed pivot → live price ──
+                   Dashed line in amber when direction matches expectation, red otherwise.
+                   Rendered BEFORE the confirmed label circles so the circles stay on top. -->
+              <line v-if="getSvgModel(tf).runningLeg"
+                :x1="getSvgModel(tf).runningLeg.startX"
+                :y1="getSvgModel(tf).runningLeg.startY"
+                :x2="getSvgModel(tf).runningLeg.endX"
+                :y2="getSvgModel(tf).runningLeg.endY"
+                :class="['running-leg', getSvgModel(tf).runningLeg.directionOK ? 'running-leg-ok' : 'running-leg-warn']"/>
+
+              <!-- Wave label circles + text — confirmed pivots only -->
+              <template v-for="(pt, idx) in getSvgModel(tf).points" :key="idx">
                 <circle :cx="pt.x" :cy="pt.y" r="10"
                   :class="pt.isCorrection ? 'label-bg-cor' : 'label-bg-imp'"/>
                 <text :x="pt.x" :y="pt.y + 4" text-anchor="middle"
                   :class="pt.isCorrection ? 'label-txt-cor' : 'label-txt-imp'">
                   {{ pt.label }}
                 </text>
+              </template>
 
-                <!-- Current position marker (pulsing white ring) -->
-                <circle v-if="pt.isCurrent" :cx="pt.x" :cy="pt.y" r="14"
-                  fill="none" stroke="#fff" stroke-width="1.5" opacity="0.4">
-                  <animate attributeName="r" values="12;16;12" dur="1.5s" repeatCount="indefinite"/>
-                  <animate attributeName="opacity" values="0.2;0.6;0.2" dur="1.5s" repeatCount="indefinite"/>
+              <!-- ── Live-price marker at the running-leg endpoint ──
+                   Dot + pulsing ring + ghost "forming" label with next expected wave
+                   number. Replaces the old "◄ NOW" marker that incorrectly pointed at
+                   the last confirmed pivot. -->
+              <template v-if="getSvgModel(tf).runningLeg">
+                <!-- Outer pulsing ring -->
+                <circle :cx="getSvgModel(tf).runningLeg.endX" :cy="getSvgModel(tf).runningLeg.endY" r="6"
+                  fill="none"
+                  :stroke="getSvgModel(tf).runningLeg.directionOK ? '#fbbf24' : '#ef4444'"
+                  stroke-width="1.5" opacity="0.55">
+                  <animate attributeName="r" values="5;10;5" dur="1.5s" repeatCount="indefinite"/>
+                  <animate attributeName="opacity" values="0.25;0.7;0.25" dur="1.5s" repeatCount="indefinite"/>
                 </circle>
-                <text v-if="pt.isCurrent" :x="pt.x + 14" :y="pt.y - 6"
-                  style="font-size:7px;fill:#888;font-weight:600">◄ NOW</text>
+                <!-- Inner solid dot -->
+                <circle :cx="getSvgModel(tf).runningLeg.endX" :cy="getSvgModel(tf).runningLeg.endY" r="3"
+                  :fill="getSvgModel(tf).runningLeg.directionOK ? '#fbbf24' : '#ef4444'"
+                  stroke="#fff" stroke-width="0.5"/>
+                <!-- Ghost forming-wave label above the dot -->
+                <text :x="getSvgModel(tf).runningLeg.endX" :y="getSvgModel(tf).runningLeg.endY - 10"
+                  text-anchor="middle" class="forming-label"
+                  :style="{ fill: getSvgModel(tf).runningLeg.directionOK ? '#fbbf24' : '#ef4444' }">
+                  {{ getSvgModel(tf).runningLeg.nextLabel }}
+                </text>
+                <!-- NOW tag to the right of the dot -->
+                <text :x="getSvgModel(tf).runningLeg.endX + 8" :y="getSvgModel(tf).runningLeg.endY + 3"
+                  class="now-tag">◄ NOW</text>
               </template>
             </svg>
 
@@ -489,6 +622,47 @@ function formatPrice(p) {
 .label-bg-cor { fill: rgba(245,158,11,0.2); stroke: rgba(245,158,11,0.5); stroke-width: 1.5; }
 .label-txt-imp { font-size: 9px; font-weight: 800; fill: #c4b5fd; font-family: 'DM Sans', sans-serif; }
 .label-txt-cor { font-size: 9px; font-weight: 800; fill: #fcd34d; font-family: 'DM Sans', sans-serif; }
+
+/* Running leg — live edge from last confirmed pivot to current price.
+   Stroke color communicates whether price is moving in the expected direction
+   for the next wave. Dash animation subtly reinforces "in-progress". */
+.running-leg {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 4 3;
+  animation: runningDash 0.9s linear infinite;
+}
+.running-leg-ok   { stroke: #fbbf24; opacity: 0.85; }
+.running-leg-warn { stroke: #ef4444; opacity: 0.9; }
+@keyframes runningDash {
+  to { stroke-dashoffset: -14; }
+}
+
+/* Forming-wave label (ghost) — italic + lighter weight than confirmed labels
+   so users can tell at a glance "this one isn't locked in yet". */
+.forming-label {
+  font-size: 9px;
+  font-weight: 700;
+  font-style: italic;
+  font-family: 'DM Sans', sans-serif;
+  opacity: 0.85;
+}
+
+/* NOW tag — appears next to the live-price dot */
+.now-tag {
+  font-size: 7px;
+  fill: #888;
+  font-weight: 600;
+}
+
+/* "(forming)" sub-tag inside the phase badge */
+.forming-tag {
+  font-size: 8px;
+  font-style: italic;
+  opacity: 0.75;
+  margin: 0 2px;
+}
 
 /* SL/TP strip */
 .sltp-strip { display: flex; gap: 4px; margin: 0 4px; }

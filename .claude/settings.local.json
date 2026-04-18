@@ -290,7 +290,9 @@
       "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php wave_health_improve.php 2>&1\")",
       "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php wave_health_regen.php 2>&1\")",
       "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php wave_health_inspect.php 2>&1\")",
-      "Bash(powershell.exe -Command \"Remove-Item C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\wave_health_improve.php, C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\wave_health_regen.php, C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\wave_health_inspect.php -ErrorAction SilentlyContinue; echo done\")"
+      "Bash(powershell.exe -Command \"Remove-Item C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\wave_health_improve.php, C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\wave_health_regen.php, C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\wave_health_inspect.php -ErrorAction SilentlyContinue; echo done\")",
+      "Bash(powershell.exe -Command \"Select-String -Path C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\frontend\\\\src\\\\components\\\\panels\\\\WaveMatrixPanel.vue -Pattern '^&lt;/script&gt;|^&lt;template&gt;|^&lt;style' | Select-Object LineNumber, Line\")",
+      "Bash(powershell.exe -Command \"Get-Content C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\frontend\\\\src\\\\components\\\\panels\\\\WaveMatrixPanel.vue | Select-String -Pattern '^&lt;' | Select-Object LineNumber, Line -First 10\")"
     ]
   }
 }
