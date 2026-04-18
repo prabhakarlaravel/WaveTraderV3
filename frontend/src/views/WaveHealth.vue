@@ -1,8 +1,31 @@
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, h } from 'vue'
 import axios from 'axios'
 import SymbolSelector from '../components/shared/SymbolSelector.vue'
 import { useChartStore } from '../stores/useChartStore'
+
+// Reusable SVG spinner — one source of truth for every loading state
+// in this view. Size is pixel units; color inherits currentColor so the
+// spinner picks up whatever text color its parent declares.
+const SpinnerIcon = {
+  props: { size: { type: [Number, String], default: 14 } },
+  setup(props) {
+    return () => h('svg', {
+      width: props.size,
+      height: props.size,
+      viewBox: '0 0 24 24',
+      fill: 'none',
+      class: 'spinner-icon',
+      'aria-hidden': 'true',
+    }, [
+      h('circle', {
+        cx: 12, cy: 12, r: 9,
+        stroke: 'currentColor', 'stroke-width': 2.5,
+        'stroke-linecap': 'round', 'stroke-dasharray': '40 60', opacity: 0.9,
+      }),
+    ])
+  },
+}
 
 const chartStore = useChartStore()
 const symbols = computed(() => chartStore.symbols)
@@ -19,6 +42,11 @@ const fixingTf = ref('')
 const regenerating = ref(false)
 const fixResults = reactive({})
 const activityLog = ref([])
+// Request state for the loader UX — drives elapsed counter + error recovery
+const loadingStartedAt = ref(0)
+const loadingElapsed = ref(0)
+const loadError = ref(null)         // null | { message, status, retriable: true }
+let elapsedTimer = null
 
 onMounted(async () => {
   if (!chartStore.symbols.length) await chartStore.fetchSymbols()
@@ -33,15 +61,43 @@ function addLog(msg, color = '#34d399') {
 async function runValidation() {
   if (!selectedSymbol.value) return
   loading.value = true
+  loadError.value = null
+  loadingStartedAt.value = Date.now()
+  loadingElapsed.value = 0
+  // Tick elapsed seconds so the skeleton shows "Validating wave structure • 4s"
+  if (elapsedTimer) clearInterval(elapsedTimer)
+  elapsedTimer = setInterval(() => {
+    loadingElapsed.value = Math.floor((Date.now() - loadingStartedAt.value) / 1000)
+  }, 500)
   addLog('Validating all timeframes...', '#7c3aed')
   try {
-    const { data } = await axios.post('/api/v1/wave-health/validate', { symbol_id: selectedSymbol.value })
+    // 120s timeout — first validation legitimately takes ~60-90s because it
+    // runs Elliott Wave + Market Structure engines across all 6 timeframes
+    // synchronously. The backend caches the result for 45s so reloads and
+    // dropdown flips are near-instant. Anything beyond 120s = backend hang.
+    const { data } = await axios.post(
+      '/api/v1/wave-health/validate',
+      { symbol_id: selectedSymbol.value },
+      { timeout: 120000 },
+    )
     validationResult.value = data
     addLog(`Validation done — health ${data.overallHealth}%, ${data.totalViolations} violations`, '#34d399')
   } catch (e) {
-    addLog(`Validation failed: ${e.message}`, '#ef5350')
+    const isTimeout = e.code === 'ECONNABORTED' || /timeout/i.test(e.message || '')
+    const isNetwork = !e.response && (e.code === 'ERR_NETWORK' || /Network Error/i.test(e.message || ''))
+    loadError.value = {
+      message: isTimeout
+        ? 'Validation timed out after 2 minutes. The backend may be under heavy load or a query is stuck.'
+        : isNetwork
+          ? 'Cannot reach the backend API. Make sure the Laravel server is running on port 8000.'
+          : (e.response?.data?.message || e.message || 'Validation failed'),
+      status: e.response?.status,
+      retriable: true,
+    }
+    addLog(`Validation failed: ${loadError.value.message}`, '#ef5350')
   } finally {
     loading.value = false
+    if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null }
   }
 }
 
@@ -124,19 +180,25 @@ const allViolations = computed(() => {
           compact
         />
         <button @click="runValidation" :disabled="loading"
-          class="rounded-md px-3 py-1.5 text-[11px] font-bold"
+          class="btn-pill inline-flex items-center gap-1.5"
           :style="{ background: loading ? '#1e40af' : '#2563eb', color: '#fff' }">
-          {{ loading ? '⟳ Validating...' : '🔍 Validate' }}
+          <SpinnerIcon v-if="loading" size="12" />
+          <span v-else>🔍</span>
+          {{ loading ? 'Validating…' : 'Validate' }}
         </button>
         <button @click="autoFixAll" :disabled="!allViolations.length || fixingTf"
-          class="rounded-md px-3 py-1.5 text-[11px] font-bold"
+          class="btn-pill inline-flex items-center gap-1.5"
           style="background: #059669; color: #fff">
-          🔧 Auto-Fix All
+          <SpinnerIcon v-if="fixingTf" size="12" />
+          <span v-else>🔧</span>
+          {{ fixingTf ? 'Fixing…' : 'Auto-Fix All' }}
         </button>
         <button @click="regenerateAll" :disabled="regenerating"
-          class="rounded-md px-3 py-1.5 text-[11px] font-bold"
+          class="btn-pill inline-flex items-center gap-1.5"
           :style="{ background: regenerating ? '#6d28d9' : '#7c3aed', color: '#fff' }">
-          {{ regenerating ? '⟳ Regenerating...' : '🔄 Regenerate Waves' }}
+          <SpinnerIcon v-if="regenerating" size="12" />
+          <span v-else>🔄</span>
+          {{ regenerating ? 'Regenerating…' : 'Regenerate Waves' }}
         </button>
       </div>
     </div>
@@ -217,7 +279,10 @@ const allViolations = computed(() => {
                 </td>
                 <td class="px-3 py-2.5 text-right">
                   <template v-if="fixStatus(tf.timeframe) === 'fixing'">
-                    <span class="text-[9px] font-bold animate-pulse" style="color: #2563eb">⟳ Testing 7 params...</span>
+                    <span class="inline-flex items-center gap-1 text-[9px] font-bold" style="color: #2563eb">
+                      <SpinnerIcon size="10" />
+                      Testing 7 params…
+                    </span>
                   </template>
                   <template v-else-if="fixStatus(tf.timeframe) === 'fixed'">
                     <span class="text-[9px] font-bold" style="color: #34d399">✓ Fixed & Saved</span>
@@ -254,7 +319,10 @@ const allViolations = computed(() => {
                 <div v-if="v.detail" class="text-[8px] mt-0.5" style="color: var(--dim)">{{ v.detail }}</div>
               </div>
               <template v-if="fixStatus(v.timeframe) === 'fixing'">
-                <span class="text-[8px] font-bold animate-pulse shrink-0" style="color: #2563eb">Testing...</span>
+                <span class="inline-flex items-center gap-1 text-[8px] font-bold shrink-0" style="color: #2563eb">
+                  <SpinnerIcon size="9" />
+                  Testing…
+                </span>
               </template>
               <template v-else-if="fixStatus(v.timeframe) === 'fixed'">
                 <span class="text-[8px] font-bold shrink-0" style="color: #34d399">✓ Resolved</span>
@@ -301,7 +369,10 @@ const allViolations = computed(() => {
                 <span class="font-bold text-[10px]" style="font-family: var(--mono); color: var(--text)">{{ tf }}</span>
                 <span v-if="r.status === 'fixed'" class="text-[8px] font-bold" style="color: #34d399">✓ SAVED</span>
                 <span v-else-if="r.status === 'no_fix'" class="text-[8px] font-bold" style="color: #fbbf24">⚡ OPTIMAL</span>
-                <span v-else-if="r.status === 'fixing'" class="text-[8px] font-bold animate-pulse" style="color: #2563eb">⟳ TESTING</span>
+                <span v-else-if="r.status === 'fixing'" class="inline-flex items-center gap-1 text-[8px] font-bold" style="color: #2563eb">
+                  <SpinnerIcon size="9" />
+                  TESTING
+                </span>
                 <span v-else class="text-[8px] font-bold" style="color: #ef5350">✕ ERROR</span>
               </div>
               <div class="text-[9px]" style="color: var(--muted)">{{ r.message }}</div>
@@ -335,9 +406,190 @@ const allViolations = computed(() => {
       </div>
     </div>
 
-    <!-- Loading -->
-    <div v-if="!validationResult && loading" class="text-center py-20">
-      <div class="text-sm animate-pulse" style="color: var(--dim)">⟳ Validating wave structure...</div>
+    <!-- Error state — replaces the skeleton when the initial validation request
+         fails (timeout, backend down, 5xx). Gives the user a clear message and
+         a Retry button instead of an eternal loading screen. -->
+    <div v-if="!validationResult && !loading && loadError"
+      class="rounded-xl p-6 text-center mx-auto" style="max-width: 560px; background: var(--card); border: 1px solid rgba(239,83,80,0.35)">
+      <div class="flex justify-center mb-3">
+        <div class="rounded-full flex items-center justify-center" style="width: 48px; height: 48px; background: rgba(239,83,80,0.12)">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef5350" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+        </div>
+      </div>
+      <div class="text-sm font-bold mb-1" style="color: var(--text)">Couldn't load wave health</div>
+      <div class="text-[12px] mb-4" style="color: var(--muted)">{{ loadError.message }}</div>
+      <button @click="runValidation" class="btn-pill inline-flex items-center gap-1.5" style="background: #2563eb; color: #fff">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"/>
+          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+        </svg>
+        Retry
+      </button>
     </div>
+
+    <!-- Skeleton loader — mirrors the real layout so the UI doesn't "jump"
+         when data arrives. Shown only on initial validation (no cached result). -->
+    <div v-if="!validationResult && loading" class="grid gap-4" style="grid-template-columns: 1fr 300px">
+      <div>
+        <!-- Summary cards skeleton -->
+        <div class="grid grid-cols-4 gap-3 mb-4">
+          <div v-for="n in 4" :key="'sum-'+n" class="rounded-lg p-3" style="background: var(--card); border: 1px solid var(--border)">
+            <div class="skel skel-line" style="width: 40%; height: 8px"></div>
+            <div class="skel skel-line mt-2" style="width: 55%; height: 24px"></div>
+            <div class="skel skel-line mt-2" style="width: 100%; height: 4px; border-radius: 9999px"></div>
+          </div>
+        </div>
+        <!-- Table skeleton -->
+        <div class="rounded-xl overflow-hidden mb-4" style="border: 1px solid var(--border)">
+          <div class="flex px-3 py-2" style="background: var(--card-alt); border-bottom: 1px solid var(--border)">
+            <div v-for="c in 7" :key="'hcol-'+c" class="flex-1"><div class="skel skel-line" style="width: 50%; height: 8px"></div></div>
+          </div>
+          <div v-for="r in 6" :key="'row-'+r" class="flex items-center px-3 py-3" :style="{ background: r%2 ? 'transparent' : 'rgba(22,32,64,0.2)', borderBottom: '1px solid rgba(22,32,64,0.4)' }">
+            <div class="flex-1"><div class="skel skel-line" style="width: 40%; height: 10px"></div></div>
+            <div class="flex-1 flex items-center justify-center gap-2">
+              <div class="skel" style="width: 22px; height: 22px; border-radius: 50%"></div>
+              <div class="skel skel-line" style="width: 28px; height: 10px"></div>
+            </div>
+            <div class="flex-1"><div class="skel skel-line mx-auto" style="width: 45%; height: 9px"></div></div>
+            <div class="flex-1"><div class="skel skel-line mx-auto" style="width: 50%; height: 9px"></div></div>
+            <div class="flex-1"><div class="skel skel-line mx-auto" style="width: 35%; height: 9px"></div></div>
+            <div class="flex-1"><div class="skel skel-line mx-auto" style="width: 30%; height: 9px"></div></div>
+            <div class="flex-1 flex justify-end"><div class="skel skel-line" style="width: 50%; height: 14px; border-radius: 6px"></div></div>
+          </div>
+        </div>
+        <!-- Violations panel skeleton -->
+        <div class="rounded-xl p-4" style="background: var(--card); border: 1px solid var(--border)">
+          <div class="skel skel-line mb-3" style="width: 30%; height: 12px"></div>
+          <div v-for="v in 3" :key="'vio-'+v" class="rounded-lg p-2.5 flex items-center gap-2 mb-2" style="background: rgba(22,32,64,0.25)">
+            <div class="skel" style="width: 20px; height: 14px; border-radius: 4px"></div>
+            <div class="flex-1 space-y-1">
+              <div class="skel skel-line" style="width: 70%; height: 9px"></div>
+              <div class="skel skel-line" style="width: 50%; height: 7px"></div>
+            </div>
+            <div class="skel" style="width: 28px; height: 14px; border-radius: 4px"></div>
+          </div>
+        </div>
+      </div>
+      <!-- Right column skeleton -->
+      <div>
+        <div class="rounded-xl p-4 mb-3" style="background: var(--card); border: 1px solid var(--border)">
+          <div class="skel skel-line mb-3" style="width: 50%; height: 12px"></div>
+          <div v-for="l in 5" :key="'log-'+l" class="flex gap-2 items-start mb-2">
+            <div class="skel shrink-0" style="width: 6px; height: 6px; border-radius: 50%; margin-top: 4px"></div>
+            <div class="flex-1 space-y-1">
+              <div class="skel skel-line" style="width: 85%; height: 8px"></div>
+              <div class="skel skel-line" style="width: 35%; height: 6px"></div>
+            </div>
+          </div>
+        </div>
+        <div class="rounded-xl p-4" style="background: var(--card); border: 1px solid var(--border)">
+          <div class="skel skel-line mb-3" style="width: 55%; height: 12px"></div>
+          <div class="grid grid-cols-2 gap-2">
+            <div v-for="d in 4" :key="'data-'+d" class="rounded-lg p-2" style="background: var(--surface)">
+              <div class="skel skel-line" style="width: 50%; height: 7px"></div>
+              <div class="skel skel-line mt-1.5" style="width: 70%; height: 12px"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live status pill — shows spinner + message + elapsed seconds so the
+           user knows the app is actually working and how long they've waited. -->
+      <div class="fixed bottom-6 right-6 inline-flex items-center gap-2 px-3 py-2 rounded-full shadow-lg"
+        style="background: var(--card); border: 1px solid var(--border); z-index: 40">
+        <SpinnerIcon size="12" />
+        <span class="text-[11px] font-semibold" style="color: var(--text)">Validating wave structure</span>
+        <span v-if="loadingElapsed > 0" class="text-[10px]"
+          :style="{ color: loadingElapsed > 15 ? '#fbbf24' : 'var(--dim)', fontFamily: 'var(--mono)' }">• {{ loadingElapsed }}s</span>
+      </div>
+      <!-- If the request is running very long, reassure the user with context.
+           First validation legitimately takes 60-90s (full engine sweep).
+           Subsequent loads are cached and return in <1s. -->
+      <div v-if="loadingElapsed >= 30"
+        class="fixed bottom-20 right-6 max-w-xs text-[10px] rounded-lg p-2.5 shadow-lg"
+        style="background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); color: #fbbf24; z-index: 40">
+        First-run validation runs every engine across 6 timeframes — expect up to 90 seconds. Subsequent loads are cached.
+      </div>
+    </div>
+
+    <!-- Full-screen overlay loader for long-running Regenerate action -->
+    <transition name="fade">
+      <div v-if="regenerating" class="fixed inset-0 flex items-center justify-center"
+        style="background: rgba(5, 8, 20, 0.72); backdrop-filter: blur(4px); z-index: 60">
+        <div class="rounded-2xl p-6 text-center" style="background: var(--card); border: 1px solid var(--border); min-width: 280px">
+          <div class="flex justify-center mb-3">
+            <SpinnerIcon size="36" />
+          </div>
+          <div class="text-sm font-bold mb-1" style="color: var(--text)">Regenerating all waves</div>
+          <div class="text-[11px]" style="color: var(--dim)">Running every engine across all timeframes. This may take up to a minute.</div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
+
+<style scoped>
+/* Skeleton shimmer — subtle left-to-right sheen */
+.skel {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface, #0f1629);
+  border-radius: 4px;
+}
+.skel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(124, 58, 237, 0.08) 30%,
+    rgba(37, 99, 235, 0.12) 50%,
+    rgba(124, 58, 237, 0.08) 70%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  animation: shimmer 1.6s infinite;
+}
+.skel-line { display: block; }
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+
+/* Pill buttons */
+.btn-pill {
+  border-radius: 9999px;
+  padding: 6px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 2px 6px rgba(0,0,0,0.25);
+}
+.btn-pill:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.06) inset, 0 4px 10px rgba(0,0,0,0.3);
+}
+.btn-pill:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+/* Spinner animation — rotates the dashed circle */
+.spinner-icon {
+  animation: spinner-rotate 0.9s linear infinite;
+  color: currentColor;
+  flex-shrink: 0;
+}
+@keyframes spinner-rotate {
+  to { transform: rotate(360deg); }
+}
+
+/* Fade transition for the regenerate overlay */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+</style>

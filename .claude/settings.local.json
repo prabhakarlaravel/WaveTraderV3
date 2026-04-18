@@ -273,7 +273,20 @@
       "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php artisan queue:work --queue=engines,default --stop-when-empty --max-time=180 2>&1\")",
       "Bash(powershell.exe -Command \"Remove-Item C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\check_apr17.php, C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\backfill_nifty_bank.php, C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\aggregate_and_engines.php -ErrorAction SilentlyContinue; echo 'cleanup done'\")",
       "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php test_gap_fill.php 2>&1\")",
-      "Bash(powershell.exe -Command \"Remove-Item C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\test_gap_fill.php -ErrorAction SilentlyContinue; echo 'cleanup done'\")"
+      "Bash(powershell.exe -Command \"Remove-Item C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\test_gap_fill.php -ErrorAction SilentlyContinue; echo 'cleanup done'\")",
+      "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\frontend; npx vite build --mode=production --logLevel=error 2>&1 | Select-String -Pattern 'WaveHealth|error' | Select-Object -First 10\")",
+      "Bash(powershell.exe -Command \"\\(Get-Content C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\frontend\\\\src\\\\views\\\\WaveHealth.vue | Measure-Object -Line\\).Lines\")",
+      "Bash(powershell.exe -File C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\timing.ps1)",
+      "Bash(powershell.exe -Command \"powershell.exe -File 'C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\timing.ps1'\")",
+      "Bash(powershell.exe -Command \"powershell.exe -ExecutionPolicy Bypass -File 'C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\timing.ps1'\")",
+      "Bash(powershell.exe -Command \"try { Invoke-WebRequest -Uri 'http://localhost:8000/api/v1/chart/symbols' -TimeoutSec 5 -UseBasicParsing | Select-Object -Property StatusCode } catch { Write-Host 'backend down' }\")",
+      "Bash(powershell.exe -Command \"Get-Content C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\storage\\\\logs\\\\laravel.log -Tail 30\")",
+      "Bash(powershell.exe -Command \"powershell.exe -ExecutionPolicy Bypass -Command \\\\\"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php artisan cache:clear; php artisan route:clear\\\\\"\")",
+      "Bash(powershell.exe -Command \"Get-Content 'C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--laragon-www-projects-WaveTraderV3\\\\79b9c3c1-6383-446c-a2d5-bf1ba8d50848\\\\tasks\\\\bekot4zmo.output'\")",
+      "Bash(powershell.exe -Command \"powershell.exe -ExecutionPolicy Bypass -File 'C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\timing2.ps1'\")",
+      "Bash(powershell.exe -Command \"curl.exe -s -v -X POST -H 'Content-Type: application/json' --data '{\\\\\"\\\\\"symbol_id\\\\\"\\\\\":8}' http://localhost:8000/api/v1/wave-health/validate 2>&1 | Select-Object -Last 20\")",
+      "Bash(powershell.exe -Command \"Remove-Item C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\timing.ps1, C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\timing2.ps1 -ErrorAction SilentlyContinue; echo done\")",
+      "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php -l app/Services/WaveHealthService.php; php -l app/Http/Controllers/Api/WaveController.php\")"
     ]
   }
 }

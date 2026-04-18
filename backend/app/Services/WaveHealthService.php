@@ -40,22 +40,38 @@ class WaveHealthService
      */
     public function validateAll(int $symbolId): array
     {
+        // Short-lived cache so page reloads and symbol-dropdown flips return
+        // instantly instead of re-running all the engines every time. TTL is
+        // intentionally conservative (45s) — plenty long to absorb reload
+        // storms, short enough that regenerate/fix results are visible
+        // almost immediately.
+        $cacheKey = "wave-health:validate:{$symbolId}";
+        $cached = \Illuminate\Support\Facades\Cache::get($cacheKey);
+        if ($cached !== null) {
+            return $cached + ['cached' => true];
+        }
+
         $symbol = Symbol::findOrFail($symbolId);
 
         $tfResults = [];
         $totalViolations = 0;
         $criticalCount = 0;
-        $fixableCount = 0;
-        $totalScore = 0;
 
         foreach (self::TIMEFRAMES as $tf) {
+            // Core analysis: Elliott Wave + Market Structure engines for THIS
+            // timeframe. ~1-5 seconds each. This is the expensive part we can't
+            // skip — it produces the violations + score displayed on the page.
             $health = $this->analyzeTimeframe($symbol, $tf);
             $dataCheck = $this->checkDataIntegrity($symbolId, $tf);
-            $bestAlt = $this->findBestParameters($symbol, $tf);
 
             $health['data_check'] = $dataCheck;
-            $health['fixable'] = $bestAlt['improved'];
-            $health['best_alt'] = $bestAlt;
+            // fixable + best_alt are NOT computed here anymore. They required
+            // running 7 extra Market Structure engines per TF (42 total), which
+            // made the endpoint take 4+ minutes. The UI now calls
+            // /api/v1/wave-health/best-params?symbol_id=X&timeframe=Y on demand
+            // (e.g., when the user opens the "alternative params" hint).
+            $health['fixable'] = null;
+            $health['best_alt'] = null;
 
             foreach ($health['violations'] as $v) {
                 $totalViolations++;
@@ -63,24 +79,42 @@ class WaveHealthService
                     $criticalCount++;
                 }
             }
-            if ($bestAlt['improved']) {
-                $fixableCount++;
-            }
 
-            $totalScore += $health['score'];
             $tfResults[] = $health;
         }
 
-        return [
+        $overallHealth = count($tfResults) > 0
+            ? (int) round(array_sum(array_column($tfResults, 'score')) / count($tfResults))
+            : 0;
+
+        $result = [
             'symbol' => $symbol->ticker,
-            'overallHealth' => count(self::TIMEFRAMES) > 0 ? round($totalScore / count(self::TIMEFRAMES)) : 0,
+            'overallHealth' => $overallHealth,
             'totalViolations' => $totalViolations,
             'criticalCount' => $criticalCount,
             'warningCount' => $totalViolations - $criticalCount,
-            'fixableCount' => $fixableCount,
+            // fixableCount defaults to 0 — populated lazily by the UI
+            // calling best-params per-timeframe when a violation is present.
+            'fixableCount' => 0,
             'dataIntegrity' => $this->checkOverallDataIntegrity($symbolId),
             'timeframes' => $tfResults,
+            'cached' => false,
         ];
+
+        \Illuminate\Support\Facades\Cache::put($cacheKey, $result, now()->addSeconds(45));
+
+        return $result;
+    }
+
+    /**
+     * Lazy per-timeframe best-params sweep — called on-demand by the UI
+     * when the user clicks a violation row. Runs 7 Market Structure engines
+     * for a single TF (~2-8s) instead of 42 for all TFs during validateAll.
+     */
+    public function bestParamsForTimeframe(int $symbolId, string $timeframe): array
+    {
+        $symbol = Symbol::findOrFail($symbolId);
+        return $this->findBestParameters($symbol, $timeframe);
     }
 
     /**

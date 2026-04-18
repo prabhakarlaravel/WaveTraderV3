@@ -76,6 +76,7 @@ Route::prefix('v1')->group(function () {
     Route::post('wave-health/validate', [WaveController::class, 'validateAll']);
     Route::post('wave-health/fix', [WaveController::class, 'autoFix']);
     Route::post('wave-health/regenerate', [WaveController::class, 'regenerateWaves']);
+    Route::get('wave-health/best-params', [WaveController::class, 'bestParams']);
 });
 
 // UDF endpoints (TradingView Charting Library) — no Sanctum middleware

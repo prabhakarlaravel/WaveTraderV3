@@ -72,14 +72,31 @@ class WaveController extends Controller
             'timeframe' => 'required|in:1M,5M,15M,1H,4H,1D',
         ]);
 
-        return response()->json($service->autoFix((int) $request->symbol_id, $request->timeframe));
+        $result = $service->autoFix((int) $request->symbol_id, $request->timeframe);
+        // Fix changes stored parameters — bust the cache so next validate is fresh
+        \Illuminate\Support\Facades\Cache::forget("wave-health:validate:{$request->symbol_id}");
+        return response()->json($result);
     }
 
     public function regenerateWaves(Request $request, WaveHealthService $service): JsonResponse
     {
         $request->validate(['symbol_id' => 'required|exists:symbols,id']);
 
-        return response()->json($service->regenerateAll((int) $request->symbol_id));
+        $result = $service->regenerateAll((int) $request->symbol_id);
+        \Illuminate\Support\Facades\Cache::forget("wave-health:validate:{$request->symbol_id}");
+        return response()->json($result);
+    }
+
+    public function bestParams(Request $request, WaveHealthService $service): JsonResponse
+    {
+        $request->validate([
+            'symbol_id' => 'required|exists:symbols,id',
+            'timeframe' => 'required|in:1M,5M,15M,1H,4H,1D',
+        ]);
+
+        return response()->json(
+            $service->bestParamsForTimeframe((int) $request->symbol_id, $request->timeframe)
+        );
     }
 
     public function signals(Request $request, string $symbol): JsonResponse
