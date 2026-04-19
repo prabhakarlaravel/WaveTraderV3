@@ -404,9 +404,14 @@ function formatPrice(p) {
             <span class="wr-expand" :class="{ open: expandedTf === tf }">▸</span>
           </div>
 
-          <!-- Expanded wave chart for this TF — SVG model is built once per
-               render via the svgModelCache computed (keyed by tf). -->
-          <div v-if="expandedTf === tf && getTfRow(tf)?.waveLabels?.length >= 3" class="wave-chart-panel">
+          <!-- Expanded wave chart for this TF — always renders when the row is
+               expanded, even if the backend hasn't published wave data for this
+               TF yet (cache miss / engine running). An empty wave array falls
+               through to the loading/empty state at the bottom so the user gets
+               visual feedback that their click worked. -->
+          <div v-if="expandedTf === tf" class="wave-chart-panel">
+            <!-- ── Case 1: data ready (≥3 waves) — render the SVG chart ── -->
+            <template v-if="getTfRow(tf)?.waveLabels?.length >= 3">
             <div class="wc-header">
               <span class="wc-tf">{{ tf }} — {{ getTfRow(tf).degree }}</span>
               <!-- Dynamic badge: when a running leg exists, shows "Wave 2 → 3 (forming)".
@@ -500,6 +505,38 @@ function formatPrice(p) {
             </svg>
 
             <div v-else class="wc-empty">Not enough wave data for {{ tf }}</div>
+            </template>
+
+            <!-- ── Case 2: partial data (1-2 waves) — show what we have + note ── -->
+            <div v-else-if="(getTfRow(tf)?.waveLabels?.length ?? 0) > 0" class="wc-partial">
+              <div class="wc-partial-header">
+                <span class="wc-tf">{{ tf }} — {{ getTfRow(tf).degree }}</span>
+                <span class="wc-partial-badge">
+                  Only {{ getTfRow(tf).waveLabels.length }}/3 waves available
+                </span>
+              </div>
+              <div class="wc-partial-body">
+                Engine hasn't identified a full wave cycle on this timeframe yet.
+                This usually resolves within one engine cycle (30 seconds).
+              </div>
+            </div>
+
+            <!-- ── Case 3: empty — engine hasn't run for this TF yet ── -->
+            <div v-else class="wc-loading">
+              <div class="wc-loading-header">
+                <span class="wc-tf">{{ tf }} — {{ getTfRow(tf)?.degree || tf }}</span>
+                <span class="wc-loading-badge">
+                  <span class="mini-spinner"></span>
+                  Computing wave structure…
+                </span>
+              </div>
+              <div class="wc-loading-body">
+                Wave engines run per-timeframe and results cache in Redis.
+                The {{ tf }} timeframe will populate on the next engine cycle
+                (~30s). If it doesn't appear, the queue worker may not be
+                running — see Settings › Engines.
+              </div>
+            </div>
           </div>
         </template>
       </div>
@@ -662,6 +699,61 @@ function formatPrice(p) {
   font-style: italic;
   opacity: 0.75;
   margin: 0 2px;
+}
+
+/* Partial / loading states when a TF's wave data isn't ready yet.
+   Keeps the accordion visibly responsive to clicks even when the backend
+   hasn't cached overlays for this TF. */
+.wc-partial, .wc-loading {
+  min-height: 100px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wc-partial-header, .wc-loading-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.wc-partial-badge {
+  font-size: 8px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: rgba(251, 191, 36, 0.1);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.25);
+}
+.wc-loading-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 8px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: rgba(59, 130, 246, 0.08);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.22);
+}
+.wc-partial-body, .wc-loading-body {
+  font-size: 9px;
+  line-height: 1.5;
+  color: var(--dim);
+  padding: 6px 2px 2px;
+}
+/* Tiny spinning ring for the loading badge */
+.mini-spinner {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid rgba(96, 165, 250, 0.25);
+  border-top-color: #60a5fa;
+  border-radius: 50%;
+  animation: mini-spin 0.8s linear infinite;
+}
+@keyframes mini-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* SL/TP strip */
