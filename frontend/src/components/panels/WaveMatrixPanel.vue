@@ -167,10 +167,14 @@ function expectedDirection(points) {
 }
 
 // Build SVG wave chart points from waveLabels.
-// When called for the active timeframe with a valid livePrice, also produces
-// a "running leg" from the last confirmed pivot out to the live price,
-// labeled with the next expected wave number.
-function buildWaveSvg(waveLabels, livePrice = null, isActiveTf = false) {
+// The running leg (live edge from last confirmed pivot → current price) is
+// rendered for ANY timeframe as long as we have a valid livePrice — the
+// live market price is a single scalar that applies across all TFs, even
+// though candle granularity differs. The per-TF insight is different:
+//   - 5M chart shows a short hop from the last 5M pivot to now
+//   - 1D chart shows a multi-day distance from the last daily pivot to now
+// Both are useful and tell different stories about where price is.
+function buildWaveSvg(waveLabels, livePrice = null) {
   if (!waveLabels || waveLabels.length < 3) return null
 
   let lastWave1Idx = -1
@@ -199,10 +203,12 @@ function buildWaveSvg(waveLabels, livePrice = null, isActiveTf = false) {
 
   if (labels.length > 16) labels = labels.slice(-16)
 
+  const hasLivePrice = Number.isFinite(livePrice)
+
   // Include livePrice in the min/max range so the running-leg endpoint never
   // overflows the viewport (otherwise a big excursion would clip off-screen).
   const prices = labels.map(w => w.price)
-  if (isActiveTf && Number.isFinite(livePrice)) prices.push(livePrice)
+  if (hasLivePrice) prices.push(livePrice)
   const minP = Math.min(...prices)
   const maxP = Math.max(...prices)
   const range = maxP - minP || 1
@@ -213,7 +219,7 @@ function buildWaveSvg(waveLabels, livePrice = null, isActiveTf = false) {
   const padY = 16
   // Reserve horizontal space on the right edge for the running leg endpoint
   // + forming-label (~ 60px) so confirmed pivots don't crowd against it.
-  const runningLegWidth = (isActiveTf && Number.isFinite(livePrice)) ? 60 : 0
+  const runningLegWidth = hasLivePrice ? 60 : 0
   const usableW = svgW - padX * 2 - runningLegWidth
   const usableH = svgH - padY * 2
 
@@ -243,9 +249,11 @@ function buildWaveSvg(waveLabels, livePrice = null, isActiveTf = false) {
   }
 
   // ── Running leg (live edge) ──
-  // Only rendered when this is the active timeframe and we have a live price.
+  // Rendered for every TF as long as a live price is available — the distance
+  // from the last confirmed pivot to current price is meaningful on all
+  // timeframes, not just the active one.
   let runningLeg = null
-  if (isActiveTf && Number.isFinite(livePrice) && points.length > 0) {
+  if (hasLivePrice && points.length > 0) {
     const lastPt = points[points.length - 1]
     const liveX = svgW - padX
     const liveY = padY + (1 - (livePrice - minP) / range) * usableH
@@ -286,19 +294,19 @@ const livePrice = computed(() => {
 // Memoized SVG-model accessor for the template. Without this, every v-if /
 // polyline / circle binding would re-run buildWaveSvg() — which is fine for
 // 6 calls per frame but 40+ once we split the model into its subfields.
-// Rebuilt automatically when mtfData, activeTimeframe, or livePrice change.
+// Rebuilt automatically when mtfData or livePrice change.
+//
+// livePrice is passed to EVERY timeframe (not just the active one) because
+// the live market price is a single scalar that applies to every TF's
+// mini-chart. Each TF's running leg will start from its own last confirmed
+// pivot — so 5M shows a short live leg, 1D shows a long one across days.
 const svgModelCache = computed(() => {
   if (!mtfData.value) return {}
   const out = {}
-  const activeTf = chartStore.activeTimeframe
   for (const tf of timeframes) {
     const row = mtfData.value.timeframes?.[tf]
     if (row?.waveLabels?.length >= 3) {
-      out[tf] = buildWaveSvg(
-        row.waveLabels,
-        tf === activeTf ? livePrice.value : null,
-        tf === activeTf,
-      )
+      out[tf] = buildWaveSvg(row.waveLabels, livePrice.value)
     }
   }
   return out
