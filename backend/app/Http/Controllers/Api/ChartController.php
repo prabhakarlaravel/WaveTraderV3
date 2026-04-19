@@ -252,9 +252,70 @@ class ChartController extends Controller
         $tfData = [];
         $trends = [];
 
+        // Per-timeframe sync compute budget. Values chosen from observed
+        // real-world timings (NIFTY BANK, ~3 months of data):
+        //   1D: 3s, 4H: 2s, 1H: 7s, 15M: 11s, 5M: 47s, 1M: 285s
+        // 1M is intentionally 0 — we never block an HTTP request on 1M engine
+        // run because it can exceed 4 minutes. 1M is dispatched to background
+        // and will populate via the queue worker / 30s scheduler.
+        $syncBudget = [
+            '1D' => 15,
+            '4H' => 15,
+            '1H' => 20,
+            '15M' => 25,
+            '5M' => 60,
+            '1M' => 0,
+        ];
+        // Track total sync time spent so one slow TF doesn't push the whole
+        // request past the frontend's 60s timeout.
+        $totalBudgetSec = 55;
+        $totalElapsed = 0.0;
+
         foreach (self::TIMEFRAMES as $tf) {
             // Read from Redis cache (populated by RunEnginesJob)
             $cached = RunEnginesJob::getCachedOverlays($symbol->id, $tf);
+
+            // Cache miss — compute synchronously within budget so the endpoint
+            // returns real data without depending on a queue worker. A cache
+            // lock coalesces concurrent requests: the first one computes,
+            // others wait up to 20s for it to finish then read the populated
+            // cache instead of running engines again.
+            if (! $cached || empty($cached['waveLabels'])) {
+                $tfBudget = $syncBudget[$tf] ?? 0;
+                $remainingTotal = $totalBudgetSec - $totalElapsed;
+
+                if ($tfBudget > 0 && $remainingTotal > 0) {
+                    $startTs = microtime(true);
+                    $lockKey = "engines-lock:{$symbol->id}:{$tf}";
+                    $lock = \Illuminate\Support\Facades\Cache::lock($lockKey, 60);
+                    try {
+                        if ($lock->block(min(20, (int) $remainingTotal))) {
+                            // Re-check cache under the lock — another request
+                            // may have just finished computing while we were blocked
+                            $cached = RunEnginesJob::getCachedOverlays($symbol->id, $tf);
+                            if (! $cached || empty($cached['waveLabels'])) {
+                                RunEnginesJob::dispatchSync($symbol->id, $tf);
+                                $cached = RunEnginesJob::getCachedOverlays($symbol->id, $tf);
+                            }
+                        }
+                    } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+                        \Illuminate\Support\Facades\Log::warning(
+                            "mtfWaves: inline engine lock timed out for {$symbol->ticker} [{$tf}]"
+                        );
+                    } catch (\Throwable $e) {
+                        \Illuminate\Support\Facades\Log::warning(
+                            "mtfWaves: inline engine run failed for {$symbol->ticker} [{$tf}]: {$e->getMessage()}"
+                        );
+                    } finally {
+                        optional($lock)->release();
+                    }
+                    $totalElapsed += microtime(true) - $startTs;
+                } else {
+                    // Skipped (1M always, or over-budget) — dispatch to queue.
+                    // Will populate on next 30s scheduler tick if a worker is running.
+                    RunEnginesJob::dispatch($symbol->id, $tf)->onQueue('engines');
+                }
+            }
 
             if ($cached && ! empty($cached['waveLabels'])) {
                 $ewMeta = $cached['metadata']['elliott_wave'] ?? [];
@@ -274,10 +335,9 @@ class ChartController extends Controller
                 continue;
             }
 
-            // Cache miss — dispatch background engine run instead of blocking.
-            // Return empty row for this TF; it will populate on next 30s cycle.
-            RunEnginesJob::dispatch($symbol->id, $tf)->onQueue('engines');
-
+            // Still missing after synchronous attempt — something's wrong upstream
+            // (engine crashed, no candles, etc.). Return empty row so the frontend
+            // shows its loading/empty state gracefully.
             $tfData[$tf] = [
                 'timeframe' => $tf,
                 'degree' => $degrees[$tf] ?? $tf,

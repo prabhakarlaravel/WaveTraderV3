@@ -25,7 +25,12 @@ async function fetchMtfWaves() {
         symbol_id: chartStore.activeSymbolId,
         timeframe: chartStore.activeTimeframe,
       },
-      timeout: 15000, // 15s timeout — avoid hanging on slow engine fallback
+      // 60s timeout — cold-start can take 20-40s when the backend has to
+      // synchronously compute engines for 6 timeframes (cache empty for all).
+      // After warm-up, cache hits return in <100ms so subsequent calls are
+      // fast. Short-circuiting at 15s used to abort legitimate cold starts
+      // and leave the panel showing "Computing wave structure..." forever.
+      timeout: 60000,
     })
     mtfData.value = data
     lastRefresh.value = new Date()
@@ -33,7 +38,11 @@ async function fetchMtfWaves() {
     if (data.confluence) {
       chartStore.setMtfConfluence(data.confluence)
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    // Log the error so cold-start failures are visible in the console,
+    // but don't throw — the template falls back to the empty/loading state.
+    console.warn('[WaveMatrix] fetch failed:', err.message)
+  }
   finally { loading.value = false }
 }
 
@@ -291,25 +300,22 @@ const livePrice = computed(() => {
   return Number.isFinite(close) ? close : null
 })
 
-// Memoized SVG-model accessor for the template. Without this, every v-if /
-// polyline / circle binding would re-run buildWaveSvg() — which is fine for
-// 6 calls per frame but 40+ once we split the model into its subfields.
-// Rebuilt automatically when mtfData or livePrice change.
+// Memoized SVG-model accessor. Only computes for the currently-expanded TF
+// — the row itself doesn't need a model (it just renders the wave letter as
+// a circle), and only one accordion is open at a time. This avoids doing
+// 6x the work every time livePrice ticks (~every 30s) when only one panel
+// is visible anyway.
 //
-// livePrice is passed to EVERY timeframe (not just the active one) because
-// the live market price is a single scalar that applies to every TF's
-// mini-chart. Each TF's running leg will start from its own last confirmed
-// pivot — so 5M shows a short live leg, 1D shows a long one across days.
+// livePrice is passed regardless of which TF is expanded — the live market
+// price is a single scalar that applies to every TF's mini-chart. Each TF's
+// running leg starts from its own last confirmed pivot, so 5M shows a short
+// live leg and 1D shows a long one across days.
 const svgModelCache = computed(() => {
-  if (!mtfData.value) return {}
-  const out = {}
-  for (const tf of timeframes) {
-    const row = mtfData.value.timeframes?.[tf]
-    if (row?.waveLabels?.length >= 3) {
-      out[tf] = buildWaveSvg(row.waveLabels, livePrice.value)
-    }
-  }
-  return out
+  const tf = expandedTf.value
+  if (!tf || !mtfData.value) return {}
+  const row = mtfData.value.timeframes?.[tf]
+  if (!row?.waveLabels || row.waveLabels.length < 3) return {}
+  return { [tf]: buildWaveSvg(row.waveLabels, livePrice.value) }
 })
 function getSvgModel(tf) { return svgModelCache.value[tf] || null }
 

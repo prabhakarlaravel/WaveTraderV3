@@ -297,7 +297,11 @@
       "Bash(Select-Object -First 20)",
       "Bash(powershell.exe -Command \"git show 53d76c5:frontend/src/components/panels/WaveMatrixPanel.vue\")",
       "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php artisan engines:run --symbol='NIFTY BANK' --timeframe=1M 2>&1; php artisan engines:run --symbol='NIFTY BANK' --timeframe=15M 2>&1; php artisan engines:run --symbol='NIFTY BANK' --timeframe=1H 2>&1; php artisan engines:run --symbol='NIFTY BANK' --timeframe=4H 2>&1; php artisan engines:run --symbol='NIFTY BANK' --timeframe=1D 2>&1\")",
-      "Bash(powershell.exe -Command \"Get-Content 'C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--laragon-www-projects-WaveTraderV3\\\\79b9c3c1-6383-446c-a2d5-bf1ba8d50848\\\\tasks\\\\b115tafrk.output'\")"
+      "Bash(powershell.exe -Command \"Get-Content 'C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--laragon-www-projects-WaveTraderV3\\\\79b9c3c1-6383-446c-a2d5-bf1ba8d50848\\\\tasks\\\\b115tafrk.output'\")",
+      "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php check_redis.php\")",
+      "Bash(powershell.exe -Command \"cd C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend; php purge_and_warm.php 2>&1\")",
+      "Bash(powershell.exe -Command \"Get-Content 'C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--laragon-www-projects-WaveTraderV3\\\\79b9c3c1-6383-446c-a2d5-bf1ba8d50848\\\\tasks\\\\bmko5zc4m.output'\")",
+      "Bash(powershell.exe -Command \"Remove-Item C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\check_redis.php, C:\\\\laragon\\\\www\\\\projects\\\\WaveTraderV3\\\\backend\\\\purge_and_warm.php -ErrorAction SilentlyContinue; echo 'cleanup done'\")"
     ]
   }
 }
